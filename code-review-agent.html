@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CodeReviewAgent — Automated AI Code Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* ─── design tokens ────────────────────────────────────────────────────── */
+  :root {
+    --bg:          #0D0F15;
+    --surface:     #131620;
+    --surface-2:   #191D28;
+    --border:      #252B38;
+    --border-soft: #1C2130;
+    --text:        #E8ECF4;
+    --text-dim:    #8A96A8;
+    --text-faint:  #4A5468;
+    --accent:      #7C6EFF;   /* electric indigo — signature */
+    --azure:       #4CA8F0;   /* ADO / Azure */
+    --warn:        #FFB347;   /* security / amber */
+    --ok:          #4ECDC4;   /* pass / teal */
+    --danger:      #FF6B6B;
+    --r:           10px;
+    --font-d: 'Space Grotesk', sans-serif;
+    --font-b: 'Inter', -apple-system, sans-serif;
+    --font-m: 'JetBrains Mono', monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-b);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    /* subtle hex grid — different from the dot-grid in the Playwright deck */
+    background-image:
+      linear-gradient(0deg,   transparent 24%, rgba(255,255,255,0.025) 25%, rgba(255,255,255,0.025) 26%, transparent 27%, transparent 74%, rgba(255,255,255,0.025) 75%, rgba(255,255,255,0.025) 76%, transparent 77%),
+      linear-gradient(90deg,  transparent 24%, rgba(255,255,255,0.025) 25%, rgba(255,255,255,0.025) 26%, transparent 27%, transparent 74%, rgba(255,255,255,0.025) 75%, rgba(255,255,255,0.025) 76%, transparent 77%);
+    background-size: 38px 38px;
+  }
+
+  ::selection { background: var(--accent); color: #0c0820; }
+
+  /* ─── PCB circuit-trace background ─────────────────────────────────────── */
+  .bg-pcb {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+  }
+  /* single faint scan-beam diagonal wash */
+  .bg-pcb::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(
+      132deg,
+      transparent 0%,
+      transparent 38%,
+      rgba(76,168,240,0.03) 44%,
+      transparent 50%
+    );
+  }
+  .pcb-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .pcb-trace { fill: none; stroke: rgba(76,168,240,0.18); stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
+  .pcb-pad   { fill: rgba(76,168,240,0.22); }
+  .pcb-pad-r { fill: none; stroke: rgba(76,168,240,0.12); stroke-width: 1; }
+  .pcb-via   { fill: none; stroke: rgba(76,168,240,0.16); stroke-width: 1; }
+
+  /* ─── progress bar ──────────────────────────────────────────────────────── */
+  .progress { position: fixed; top: 0; left: 0; width: 100%; height: 2px; background: var(--border-soft); z-index: 90; }
+  .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--azure), var(--ok)); transition: width .1s; }
+
+  /* ─── rail nav ──────────────────────────────────────────────────────────── */
+  .rail {
+    position: fixed; left: 1.4rem; top: 50%; transform: translateY(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 11px; z-index: 80;
+  }
+  .rail::before {
+    content: ""; position: absolute; top: -20px; bottom: -20px; left: 50%;
+    width: 1px; background: var(--border); transform: translateX(-50%); z-index: -1;
+  }
+  .rdot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--border); border: 1px solid var(--border-soft);
+    cursor: pointer; transition: background .2s, transform .2s, box-shadow .2s; flex-shrink: 0;
+  }
+  .rdot:hover { background: var(--text-faint); }
+  .rdot.on {
+    background: var(--accent); border-color: var(--accent); transform: scale(1.4);
+    box-shadow: 0 0 0 4px rgba(124,110,255,0.18);
+  }
+
+  /* ─── deck + slides ─────────────────────────────────────────────────────── */
+  .deck {
+    height: 100vh; overflow-y: scroll;
+    scroll-snap-type: y mandatory; scroll-behavior: smooth;
+    position: relative; z-index: 1;
+  }
+  .slide {
+    min-height: 100vh; width: 100%; scroll-snap-align: start;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: clamp(2.5rem,6vw,5.5rem) clamp(1.5rem,10vw,8.5rem);
+    border-bottom: 1px solid var(--border-soft); position: relative;
+  }
+  .inner { max-width: 1200px; margin: 0 auto; width: 100%; }
+
+  .snum {
+    position: absolute; bottom: 2rem; right: 3rem;
+    font-family: var(--font-m); font-size: .76rem; color: var(--text-faint);
+  }
+  .snum b { color: var(--text-dim); font-weight: 500; }
+
+  /* ─── shared text ───────────────────────────────────────────────────────── */
+  .brow {
+    font-family: var(--font-m); font-size: .76rem; letter-spacing: .05em;
+    color: var(--accent); display: inline-flex; align-items: center; gap: .5em;
+    margin-bottom: 1.2rem;
+  }
+  .brow::before { content: "//"; color: var(--text-faint); margin-right: .15em; }
+  .brow.az { color: var(--azure); }
+  .brow.warn { color: var(--warn); }
+  .brow.ok { color: var(--ok); }
+
+  h1.htitle {
+    font-family: var(--font-d); font-weight: 600;
+    font-size: clamp(2rem, 4.2vw, 3.5rem);
+    line-height: 1.08; letter-spacing: -.01em; margin-bottom: 1.1rem;
+  }
+  p.lead { color: var(--text-dim); font-size: 1.05rem; line-height: 1.65; max-width: 66ch; }
+  .sub { color: var(--text-dim); font-size: .9rem; line-height: 1.55; }
+  .ic {
+    font-family: var(--font-m); font-size: .82em;
+    background: var(--surface-2); border: 1px solid var(--border);
+    padding: .1em .45em; border-radius: 5px; color: #BDB3FF;
+  }
+
+  /* ─── title slide specific ───────────────────────────────────────────────── */
+  .title-eyebrow {
+    font-family: var(--font-m); font-size: .78rem; letter-spacing: .06em;
+    color: var(--accent); margin-bottom: 1.4rem; opacity: .7;
+  }
+  .title-eyebrow::before { content: "// "; }
+  .title-agent {
+    display: inline-flex; align-items: center; gap: .8rem; margin-bottom: 2rem;
+  }
+  .agent-icon {
+    width: 56px; height: 56px; border-radius: 14px;
+    background: linear-gradient(135deg, var(--accent) 0%, #5540FF 100%);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.5rem; flex-shrink: 0;
+    box-shadow: 0 0 0 1px rgba(124,110,255,.4), 0 0 32px rgba(124,110,255,.2);
+  }
+  .title-meta {
+    margin-top: 2.5rem; display: flex; flex-wrap: wrap; gap: 2rem;
+    font-family: var(--font-m); font-size: .8rem; color: var(--text-faint);
+  }
+  .title-meta span b { color: var(--text-dim); font-weight: 500; }
+
+  /* ─── agenda ──────────────────────────────────────────────────────────────── */
+  .agenda { margin-top: 1.8rem; }
+  .ai {
+    display: flex; align-items: baseline; gap: 1.2rem;
+    padding: .8rem 0; border-bottom: 1px solid var(--border-soft);
+  }
+  .ai:first-child { border-top: 1px solid var(--border-soft); }
+  .an { font-family: var(--font-m); color: var(--text-faint); font-size: .8rem; width: 2ch; }
+  .at { font-size: 1rem; color: var(--text); font-weight: 500; }
+  .atag { margin-left: auto; font-family: var(--font-m); font-size: .7rem;
+    color: var(--accent); opacity: .7; }
+  .atag.az { color: var(--azure); }
+  .atag.warn { color: var(--warn); }
+
+  /* ─── problem grid ────────────────────────────────────────────────────────── */
+  .prob-grid {
+    margin-top: 2rem; display: grid;
+    grid-template-columns: repeat(3, 1fr); gap: 1px;
+    background: var(--border-soft); border: 1px solid var(--border-soft);
+    border-radius: var(--r); overflow: hidden;
+  }
+  .prob {
+    background: var(--surface); padding: 1.5rem 1.4rem;
+  }
+  .prob-n { font-family: var(--font-m); font-size: .7rem; color: var(--danger); margin-bottom: .55rem; }
+  .prob h3 { font-family: var(--font-d); font-size: 1rem; font-weight: 600; color: var(--text); margin-bottom: .45rem; }
+  .prob p { color: var(--text-dim); font-size: .88rem; line-height: 1.52; }
+
+  /* ─── how-built strip ──────────────────────────────────────────────────────── */
+  .built-strip {
+    margin-top: 2rem; display: grid; grid-template-columns: repeat(3,1fr); gap: 1.1rem;
+  }
+  .bs {
+    border: 1px solid var(--border); border-radius: var(--r);
+    padding: 1.4rem 1.3rem; background: var(--surface);
+    border-top: 3px solid var(--c, var(--border));
+  }
+  .bs .bsl { font-family: var(--font-m); font-size: .7rem; color: var(--c, var(--text-faint)); margin-bottom: .55rem; text-transform: uppercase; letter-spacing: .04em; }
+  .bs h3 { font-family: var(--font-d); font-size: 1.05rem; font-weight: 600; color: var(--text); margin-bottom: .35rem; }
+  .bs p { color: var(--text-dim); font-size: .88rem; line-height: 1.5; }
+
+  /* ─── command cards ─────────────────────────────────────────────────────────── */
+  .cmd-grid { margin-top: 2rem; display: grid; grid-template-columns: repeat(2,1fr); gap: 1.1rem; }
+  .cmd-card {
+    border: 1px solid var(--border); border-radius: var(--r); overflow: hidden;
+    background: var(--surface);
+  }
+  .cmd-head {
+    padding: .9rem 1.2rem; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: .7rem; background: var(--surface-2);
+  }
+  .cmd-token {
+    font-family: var(--font-m); font-size: .95rem; font-weight: 600;
+    color: var(--c, var(--accent)); letter-spacing: .01em;
+  }
+  .cmd-badge {
+    margin-left: auto; font-family: var(--font-m); font-size: .68rem;
+    padding: .18rem .55rem; border-radius: 99px;
+    background: rgba(124,110,255,.1); border: 1px solid rgba(124,110,255,.2);
+    color: var(--accent);
+  }
+  .cmd-body { padding: 1.2rem 1.3rem; }
+  .cmd-body p { color: var(--text-dim); font-size: .9rem; line-height: 1.55; }
+  .cmd-body .ex {
+    margin-top: .9rem; background: #0a0c12; border: 1px solid var(--border);
+    border-radius: 7px; padding: .7rem 1rem;
+    font-family: var(--font-m); font-size: .78rem; color: var(--text-faint);
+  }
+  .cmd-body .ex .pr { color: var(--azure); }
+  .cmd-body .ex .ag { color: var(--accent); }
+  .cmd-body .ex .cmd-t { color: var(--ok); }
+
+  /* ─── trigger flow ──────────────────────────────────────────────────────────── */
+  .tflow { margin-top: 2rem; }
+  .tflow-row {
+    display: flex; align-items: flex-start; gap: 1.1rem; position: relative;
+    padding-bottom: 1.5rem;
+  }
+  .tflow-row:not(:last-child)::before {
+    content: ""; position: absolute;
+    left: 20px; top: 43px; bottom: 0; width: 1px; background: var(--border);
+  }
+  .tflow-icon {
+    width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0;
+    border: 1px solid var(--c, var(--border)); background: var(--surface);
+    display: flex; align-items: center; justify-content: center;
+    font-size: .85rem; z-index: 1;
+  }
+  .tflow-body h4 { font-family: var(--font-d); font-size: 1rem; font-weight: 600; color: var(--text); margin-bottom: .25rem; }
+  .tflow-body p { color: var(--text-dim); font-size: .88rem; line-height: 1.52; max-width: 64ch; }
+  .tflow-body .chip {
+    display: inline-block; margin-top: .45rem;
+    font-family: var(--font-m); font-size: .72rem;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text-faint);
+    padding: .14rem .5rem; border-radius: 5px;
+  }
+
+  /* ─── THREE-LAYER SIGNATURE ELEMENT ──────────────────────────────────────── */
+  .layer-stage {
+    margin-top: 2.2rem;
+    display: flex;
+    gap: 3rem;
+    align-items: flex-start;
+  }
+  .layer-stack {
+    flex-shrink: 0;
+    position: relative;
+    width: 340px;
+    height: 300px;
+    perspective: 900px;
+  }
+  .layer-plate {
+    position: absolute;
+    left: 0; right: 0;
+    border-radius: 12px;
+    border: 1px solid var(--bc, var(--border));
+    background: var(--bk, var(--surface));
+    padding: 1.1rem 1.4rem;
+    transform-style: preserve-3d;
+  }
+  .layer-plate.l0 {
+    --bc: rgba(255,107,107,.35);
+    --bk: rgba(20,14,18,0.96);
+    top: 0;
+    width: 100%;
+    transform: rotateX(8deg) translateY(0px);
+    box-shadow: 0 2px 20px rgba(0,0,0,.4), 0 0 0 1px rgba(255,107,107,.08);
+  }
+  .layer-plate.l1 {
+    --bc: rgba(124,110,255,.4);
+    --bk: rgba(16,15,24,0.96);
+    top: 86px;
+    width: 96%;
+    left: 2%;
+    transform: rotateX(8deg) translateY(0px);
+    box-shadow: 0 2px 20px rgba(0,0,0,.5), 0 0 0 1px rgba(124,110,255,.1);
+  }
+  .layer-plate.l2 {
+    --bc: rgba(76,168,240,.4);
+    --bk: rgba(12,16,22,0.96);
+    top: 172px;
+    width: 92%;
+    left: 4%;
+    transform: rotateX(8deg) translateY(0px);
+    box-shadow: 0 2px 20px rgba(0,0,0,.6), 0 0 0 1px rgba(76,168,240,.08);
+  }
+  .lp-num { font-family: var(--font-m); font-size: .68rem; color: var(--lc, var(--text-faint)); text-transform: uppercase; letter-spacing: .06em; margin-bottom: .3rem; }
+  .lp-title { font-family: var(--font-d); font-size: .96rem; font-weight: 600; color: var(--text); margin-bottom: .2rem; }
+  .lp-sub { font-family: var(--font-m); font-size: .72rem; color: var(--text-faint); }
+  .l0 .lp-num { --lc: var(--danger); }
+  .l1 .lp-num { --lc: var(--accent); }
+  .l2 .lp-num { --lc: var(--azure); }
+
+  .layer-desc { flex: 1; display: flex; flex-direction: column; gap: 1rem; }
+  .ld {
+    padding: 1.1rem 1.2rem; border: 1px solid var(--border); border-radius: var(--r);
+    background: var(--surface); border-left: 3px solid var(--ldc, var(--border));
+  }
+  .ld h4 { font-family: var(--font-d); font-weight: 600; font-size: .98rem; color: var(--text); margin-bottom: .3rem; }
+  .ld p { color: var(--text-dim); font-size: .88rem; line-height: 1.52; }
+
+  /* ─── layer detail grids ────────────────────────────────────────────────────── */
+  .lg-grid {
+    margin-top: 2rem; display: grid; grid-template-columns: repeat(2,1fr); gap: 1.1rem;
+  }
+  .lgc {
+    border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
+    overflow: hidden;
+  }
+  .lgc-head {
+    padding: .75rem 1.1rem; border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+    display: flex; align-items: center; gap: .6rem;
+  }
+  .lgc-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dc, var(--text-faint)); flex-shrink: 0; }
+  .lgc-head span { font-family: var(--font-m); font-size: .74rem; color: var(--text-dim); }
+  .lgc-body { padding: 1.1rem 1.2rem; }
+  .lgc-body p { color: var(--text-dim); font-size: .88rem; line-height: 1.52; margin-bottom: .55rem; }
+  .lgc-body p:last-child { margin-bottom: 0; }
+
+  /* ─── lang chips ─────────────────────────────────────────────────────────────── */
+  .langs { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: 1.1rem; }
+  .lang {
+    font-family: var(--font-m); font-size: .72rem;
+    padding: .22rem .65rem; border-radius: 5px;
+    border: 1px solid var(--lbc, var(--border));
+    background: var(--lbg, var(--surface-2)); color: var(--ltc, var(--text-faint));
+  }
+
+  /* ─── repo box ──────────────────────────────────────────────────────────────── */
+  .repo-twocol { display: grid; grid-template-columns: 1fr 1.1fr; gap: 2rem; margin-top: 2rem; }
+  .code-block {
+    background: #080A10; border: 1px solid var(--border);
+    border-radius: var(--r); overflow: hidden;
+  }
+  .cb-head {
+    padding: .6rem 1rem; background: var(--surface-2); border-bottom: 1px solid var(--border);
+    font-family: var(--font-m); font-size: .7rem; color: var(--text-faint);
+  }
+  .cb-body { padding: 1.2rem 1.3rem; font-family: var(--font-m); font-size: .8rem; line-height: 1.75; color: var(--text-dim); }
+  .cb-body .cm { color: var(--text-faint); }
+  .cb-body .ky { color: #BDB3FF; }
+  .cb-body .vl { color: #8BE8A4; }
+
+  .repo-list { display: flex; flex-direction: column; gap: .95rem; }
+  .rli { display: flex; gap: .8rem; align-items: flex-start; }
+  .rli-ic {
+    width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0; margin-top: .1rem;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(76,168,240,.1); color: var(--azure); font-size: .72rem; font-family: var(--font-m);
+  }
+  .rli p { color: var(--text-dim); font-size: .9rem; line-height: 1.52; }
+  .rli p b { color: var(--text); font-weight: 600; }
+
+  /* ─── ARCHITECTURE PLACEHOLDER ──────────────────────────────────────────────── */
+  .arch-frame {
+    margin-top: 2rem; border: 1px dashed rgba(76,168,240,.25);
+    border-radius: var(--r); background: rgba(76,168,240,.025);
+    padding: 2rem; display: flex; flex-direction: column; align-items: center;
+  }
+  .arch-label {
+    font-family: var(--font-m); font-size: .7rem; color: rgba(76,168,240,.35);
+    letter-spacing: .12em; text-transform: uppercase; margin-bottom: 2rem;
+  }
+  .arch-nodes {
+    display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; justify-content: center;
+  }
+  .arch-node {
+    border: 1px solid var(--border); border-radius: var(--r);
+    background: var(--surface); padding: .9rem 1.2rem;
+    display: flex; flex-direction: column; align-items: center; gap: .4rem;
+    min-width: 120px; text-align: center;
+  }
+  .arch-node .icn { font-size: 1.3rem; }
+  .arch-node .ln { font-family: var(--font-m); font-size: .7rem; color: var(--text-faint); }
+  .arch-node .nm { font-family: var(--font-d); font-weight: 600; font-size: .88rem; color: var(--text); }
+  .arch-node.hi { border-color: var(--accent); background: rgba(124,110,255,.05); }
+  .arch-arr { color: var(--text-faint); font-size: .9rem; font-family: var(--font-m); }
+  .arch-note {
+    margin-top: 1.8rem; font-family: var(--font-m); font-size: .72rem;
+    color: rgba(76,168,240,.3); letter-spacing: .06em;
+  }
+
+  /* ─── ANALYTICS ─────────────────────────────────────────────────────────────── */
+  .metrics-row {
+    margin-top: 2rem; display: grid; grid-template-columns: repeat(4,1fr); gap: 1.1rem;
+  }
+  .metric {
+    border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
+    padding: 1.3rem 1.2rem;
+  }
+  .metric .mt { font-family: var(--font-m); font-size: .7rem; color: var(--text-faint); margin-bottom: .55rem; }
+  .metric .mv {
+    font-family: var(--font-d); font-size: 2.2rem; font-weight: 700;
+    letter-spacing: -.02em; line-height: 1;
+    background: linear-gradient(135deg, var(--mc, var(--text)) 0%, var(--mc2, var(--text-dim)) 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .metric .ms { font-family: var(--font-m); font-size: .72rem; color: var(--ok); margin-top: .4rem; }
+  .metric .ms.warn { color: var(--warn); }
+
+  .analytics-lower { margin-top: 1.2rem; display: grid; grid-template-columns: 1.6fr 1fr; gap: 1.1rem; }
+
+  .bar-chart {
+    border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
+    padding: 1.3rem 1.4rem;
+  }
+  .bar-chart h4 { font-family: var(--font-d); font-weight: 600; font-size: .95rem; color: var(--text); margin-bottom: 1.2rem; }
+  .bar-row { display: flex; align-items: center; gap: .75rem; margin-bottom: .7rem; }
+  .bar-label { font-family: var(--font-m); font-size: .72rem; color: var(--text-faint); width: 90px; text-align: right; flex-shrink: 0; }
+  .bar-track { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; background: var(--bc, var(--accent)); }
+  .bar-val { font-family: var(--font-m); font-size: .72rem; color: var(--text-dim); width: 2.5ch; }
+
+  .pr-table {
+    border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
+    overflow: hidden;
+  }
+  .pr-table h4 {
+    font-family: var(--font-d); font-weight: 600; font-size: .95rem; color: var(--text);
+    padding: 1.1rem 1.2rem; border-bottom: 1px solid var(--border);
+  }
+  .pr-row {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .65rem 1.2rem; border-bottom: 1px solid var(--border-soft);
+  }
+  .pr-row:last-child { border-bottom: none; }
+  .pr-row .repo-n { font-family: var(--font-m); font-size: .74rem; color: var(--azure); flex: 1; }
+  .pr-row .pr-c { font-family: var(--font-d); font-weight: 600; font-size: .88rem; color: var(--text); }
+  .pr-row .pr-s {
+    font-family: var(--font-m); font-size: .66rem; padding: .16rem .5rem;
+    border-radius: 99px; border: 1px solid var(--bc, var(--border)); color: var(--tc, var(--text-faint));
+  }
+
+  /* ─── benefits & guardrails ─────────────────────────────────────────────────── */
+  .ben-grid { margin-top: 2rem; display: grid; grid-template-columns: repeat(2,1fr); gap: 1.1rem; }
+  .ben { border: 1px solid var(--border); border-radius: var(--r); padding: 1.3rem 1.4rem; background: var(--surface); }
+  .ben .bt { font-family: var(--font-m); font-size: .7rem; color: var(--ok); margin-bottom: .45rem; }
+  .ben h4 { font-family: var(--font-d); font-weight: 600; font-size: 1.02rem; color: var(--text); margin-bottom: .35rem; }
+  .ben p { color: var(--text-dim); font-size: .88rem; line-height: 1.5; }
+
+  .guard-grid {
+    margin-top: 2rem; display: grid; grid-template-columns: repeat(2,1fr);
+    gap: 1px; background: var(--border-soft); border: 1px solid var(--border-soft);
+    border-radius: var(--r); overflow: hidden;
+  }
+  .guard { background: var(--surface); padding: 1.3rem 1.4rem; }
+  .guard .gn { font-family: var(--font-m); font-size: .7rem; color: var(--danger); margin-bottom: .4rem; }
+  .guard h4 { font-family: var(--font-d); font-weight: 600; font-size: 1rem; color: var(--text); margin-bottom: .35rem; }
+  .guard p { color: var(--text-dim); font-size: .88rem; line-height: 1.52; }
+
+  /* ─── roadmap / closing ─────────────────────────────────────────────────────── */
+  .roadmap { margin-top: 1.8rem; display: flex; flex-direction: column; gap: .85rem; }
+  .ri { display: flex; gap: 1rem; align-items: baseline; }
+  .rq { font-family: var(--font-m); font-size: .76rem; color: var(--text-faint); width: 5ch; flex-shrink: 0; }
+  .ri p { color: var(--text-dim); font-size: .94rem; }
+  .ri p b { color: var(--text); font-weight: 600; }
+  .closing-cta {
+    margin-top: 2.5rem; padding-top: 1.8rem; border-top: 1px solid var(--border-soft);
+    display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 1.5rem;
+  }
+  .big { font-family: var(--font-d); font-size: clamp(1.5rem,2.8vw,2.2rem); font-weight: 600; }
+  .big .hi { color: var(--accent); }
+
+  /* ─── responsive ─────────────────────────────────────────────────────────────── */
+  @media (max-width: 900px) {
+    .rail { display: none; }
+    .slide { padding: 5rem 1.5rem 3rem; }
+    .prob-grid, .built-strip, .cmd-grid, .repo-twocol, .ben-grid,
+    .guard-grid, .metrics-row, .analytics-lower, .lg-grid { grid-template-columns: 1fr; }
+    .layer-stage { flex-direction: column; }
+    .layer-stack { width: 100%; height: 240px; }
+    .arch-nodes { gap: .5rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── PCB background ─────────────────────────────────────────────────────── -->
+<div class="bg-pcb" aria-hidden="true">
+  <svg class="pcb-svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+    <!--  top-left corner — horizontal/vertical traces with pads  -->
+    <g opacity="1">
+      <!-- main horizontal run -->
+      <polyline class="pcb-trace" points="0,80 120,80 120,140 220,140"/>
+      <polyline class="pcb-trace" points="0,140 60,140 60,200 160,200 160,260"/>
+      <polyline class="pcb-trace" points="80,0 80,60 180,60 180,30 280,30"/>
+      <polyline class="pcb-trace" points="200,0 200,120 320,120 320,80 440,80"/>
+      <polyline class="pcb-trace" points="0,260 100,260 100,320"/>
+      <line class="pcb-trace" x1="120" y1="80" x2="120" y2="0"/>
+      <line class="pcb-trace" x1="220" y1="140" x2="360" y2="140"/>
+      <polyline class="pcb-trace" points="360,140 360,100 460,100 460,60 560,60"/>
+      <!-- pads -->
+      <circle class="pcb-pad" cx="120" cy="80"  r="4"/>
+      <circle class="pcb-pad" cx="60"  cy="140" r="4"/>
+      <circle class="pcb-pad" cx="160" cy="200" r="4"/>
+      <circle class="pcb-pad" cx="80"  cy="60"  r="4"/>
+      <circle class="pcb-pad" cx="180" cy="60"  r="4"/>
+      <circle class="pcb-pad" cx="200" cy="120" r="4"/>
+      <circle class="pcb-pad" cx="320" cy="120" r="4"/>
+      <circle class="pcb-pad" cx="220" cy="140" r="4"/>
+      <circle class="pcb-pad" cx="360" cy="140" r="4"/>
+      <circle class="pcb-pad" cx="460" cy="100" r="4"/>
+      <!-- vias -->
+      <circle class="pcb-via" cx="120" cy="80"  r="8"/>
+      <circle class="pcb-via" cx="360" cy="140" r="8"/>
+      <circle class="pcb-via" cx="200" cy="120" r="8"/>
+    </g>
+
+    <!-- top-right corner -->
+    <g opacity="1">
+      <polyline class="pcb-trace" points="1600,60 1480,60 1480,120 1380,120 1380,80 1260,80"/>
+      <polyline class="pcb-trace" points="1600,140 1520,140 1520,180 1400,180 1400,240"/>
+      <polyline class="pcb-trace" points="1480,60 1480,0"/>
+      <polyline class="pcb-trace" points="1380,120 1380,200 1280,200 1280,160"/>
+      <line class="pcb-trace" x1="1260" y1="80" x2="1140" y2="80"/>
+      <polyline class="pcb-trace" points="1400,240 1300,240 1300,200"/>
+      <!-- pads -->
+      <circle class="pcb-pad" cx="1480" cy="60"  r="4"/>
+      <circle class="pcb-pad" cx="1380" cy="120" r="4"/>
+      <circle class="pcb-pad" cx="1520" cy="140" r="4"/>
+      <circle class="pcb-pad" cx="1400" cy="180" r="4"/>
+      <circle class="pcb-pad" cx="1280" cy="200" r="4"/>
+      <circle class="pcb-pad" cx="1380" cy="200" r="4"/>
+      <!-- vias -->
+      <circle class="pcb-via" cx="1480" cy="60"  r="8"/>
+      <circle class="pcb-via" cx="1380" cy="120" r="8"/>
+    </g>
+
+    <!-- bottom-left corner -->
+    <g opacity="1">
+      <polyline class="pcb-trace" points="0,780 80,780 80,740 200,740 200,800 320,800"/>
+      <polyline class="pcb-trace" points="0,840 120,840 120,780"/>
+      <polyline class="pcb-trace" points="200,740 200,680 320,680 320,720 440,720"/>
+      <polyline class="pcb-trace" points="320,800 320,900"/>
+      <line class="pcb-trace" x1="80" y1="780" x2="80" y2="900"/>
+      <polyline class="pcb-trace" points="440,720 440,760 560,760"/>
+      <!-- pads -->
+      <circle class="pcb-pad" cx="80"  cy="780" r="4"/>
+      <circle class="pcb-pad" cx="200" cy="740" r="4"/>
+      <circle class="pcb-pad" cx="120" cy="840" r="4"/>
+      <circle class="pcb-pad" cx="200" cy="800" r="4"/>
+      <circle class="pcb-pad" cx="320" cy="800" r="4"/>
+      <circle class="pcb-pad" cx="320" cy="680" r="4"/>
+      <circle class="pcb-pad" cx="440" cy="720" r="4"/>
+      <!-- vias -->
+      <circle class="pcb-via" cx="200" cy="740" r="8"/>
+      <circle class="pcb-via" cx="320" cy="800" r="8"/>
+    </g>
+
+    <!-- bottom-right corner -->
+    <g opacity="1">
+      <polyline class="pcb-trace" points="1600,820 1480,820 1480,760 1360,760 1360,800 1240,800"/>
+      <polyline class="pcb-trace" points="1600,740 1540,740 1540,700 1420,700 1420,740"/>
+      <polyline class="pcb-trace" points="1360,760 1360,680 1240,680 1240,720"/>
+      <polyline class="pcb-trace" points="1240,800 1240,900"/>
+      <line class="pcb-trace" x1="1480" y1="820" x2="1480" y2="900"/>
+      <polyline class="pcb-trace" points="1240,680 1120,680 1120,720"/>
+      <!-- pads -->
+      <circle class="pcb-pad" cx="1480" cy="820" r="4"/>
+      <circle class="pcb-pad" cx="1360" cy="760" r="4"/>
+      <circle class="pcb-pad" cx="1540" cy="740" r="4"/>
+      <circle class="pcb-pad" cx="1420" cy="700" r="4"/>
+      <circle class="pcb-pad" cx="1240" cy="800" r="4"/>
+      <circle class="pcb-pad" cx="1360" cy="680" r="4"/>
+      <circle class="pcb-pad" cx="1240" cy="680" r="4"/>
+      <!-- vias -->
+      <circle class="pcb-via" cx="1360" cy="760" r="8"/>
+      <circle class="pcb-via" cx="1240" cy="800" r="8"/>
+    </g>
+
+    <!-- slim mid-screen horizontal trace — just enough to break the empty center without crowding it -->
+    <g opacity="0.45">
+      <polyline class="pcb-trace" points="0,448 56,448 56,464 120,464"/>
+      <polyline class="pcb-trace" points="1600,452 1544,452 1544,464 1480,464"/>
+      <circle class="pcb-pad" cx="56"   cy="448" r="3"/>
+      <circle class="pcb-pad" cx="1544" cy="452" r="3"/>
+    </g>
+  </svg>
+</div>
+
+<!-- ── UI chrome ─────────────────────────────────────────────────────────── -->
+<div class="progress"><div class="progress-fill" id="progressBar"></div></div>
+<nav class="rail" id="rail" aria-label="Slide navigation"></nav>
+
+<!-- ── SLIDES ─────────────────────────────────────────────────────────────── -->
+<main class="deck" id="deck">
+
+  <!-- 01 TITLE ─────────────────────────────────────────────────────────────── -->
+  <section class="slide" id="s0" data-label="Title">
+    <div class="inner">
+      <div class="title-eyebrow">automated code review · azure devops · ai-powered</div>
+      <div class="title-agent">
+        <div class="agent-icon">🤖</div>
+      </div>
+      <h1 class="htitle">CodeReview<span style="color:var(--accent)">Agent</span></h1>
+      <p class="lead">An in-house AI agent built on Azure Functions and Azure AI Foundry that reviews pull requests automatically inside ADO — triggered by a simple PR comment, customisable per repository.</p>
+      <div class="title-meta">
+        <span><b>Runtime:</b> Azure Functions</span>
+        <span><b>Model:</b> Azure AI Foundry</span>
+        <span><b>Integration:</b> Azure DevOps PR Comments</span>
+        <span><b>Customisation:</b> Three-layer prompting</span>
+      </div>
+    </div>
+    <div class="snum"><b>01</b> / 14</div>
+  </section>
+
+  <!-- 02 AGENDA ───────────────────────────────────────────────────────────── -->
+  <section class="slide" id="s1" data-label="Agenda">
+    <div class="inner">
+      <div class="brow">agenda</div>
+      <h1 class="htitle">What we'll cover</h1>
+      <div class="agenda">
+        <div class="ai"><span class="an">01</span><span class="at">Why automated code review — the problem we're solving</span><span class="atag">context</span></div>
+        <div class="ai"><span class="an">02</span><span class="at">What CodeReviewAgent is and how it's built</span><span class="atag az">built here</span></div>
+        <div class="ai"><span class="an">03</span><span class="at">Triggering it — four commands inside ADO PR comments</span><span class="atag">/commands</span></div>
+        <div class="ai"><span class="an">04</span><span class="at">How a PR review flows end to end</span><span class="atag">flow</span></div>
+        <div class="ai"><span class="an">05</span><span class="at">Three-layer prompt architecture — the core design</span><span class="atag warn">layers</span></div>
+        <div class="ai"><span class="an">06</span><span class="at">Base layer — grounding, safety and security</span><span class="atag">base</span></div>
+        <div class="ai"><span class="an">07</span><span class="at">Layer 1 &amp; 2 — language prompts (all languages + SQL, CS, TS, TSX)</span><span class="atag">L1 · L2</span></div>
+        <div class="ai"><span class="an">08</span><span class="at">Layer 3 — repo-specific custom instructions</span><span class="atag">L3</span></div>
+        <div class="ai"><span class="an">09</span><span class="at">Architecture diagram</span><span class="atag az">design</span></div>
+        <div class="ai"><span class="an">10</span><span class="at">Analytics — PRs reviewed, cost per review, top repos</span><span class="atag">metrics</span></div>
+        <div class="ai"><span class="an">11</span><span class="at">Benefits, guardrails, and next steps</span><span class="atag">wrap-up</span></div>
+      </div>
+    </div>
+    <div class="snum"><b>02</b> / 14</div>
+  </section>
+
+  <!-- 03 THE PROBLEM ───────────────────────────────────────────────────────── -->
+  <section class="slide" id="s2" data-label="The Problem">
+    <div class="inner">
+      <div class="brow warn">the problem</div>
+      <h1 class="htitle">Code review is a bottleneck</h1>
+      <p class="lead">Developers wait. Reviewers miss patterns under time pressure. Security issues slip through when nobody checks every file. This is the gap CodeReviewAgent fills.</p>
+      <div class="prob-grid">
+        <div class="prob">
+          <div class="prob-n">PAIN 01</div>
+          <h3>Review lag</h3>
+          <p>PRs sit open waiting for a reviewer who's busy. Merge delays compound, blocking downstream work.</p>
+        </div>
+        <div class="prob">
+          <div class="prob-n">PAIN 02</div>
+          <h3>Inconsistent depth</h3>
+          <p>Review quality varies by reviewer, time of day and PR size. Large PRs get less scrutiny than small ones.</p>
+        </div>
+        <div class="prob">
+          <div class="prob-n">PAIN 03</div>
+          <h3>Security blind spots</h3>
+          <p>SQL injection, exposed secrets and insecure patterns need a trained eye on every file — manual review rarely delivers that consistently.</p>
+        </div>
+      </div>
+    </div>
+    <div class="snum"><b>03</b> / 14</div>
+  </section>
+
+  <!-- 04 WHAT IT IS ────────────────────────────────────────────────────────── -->
+  <section class="slide" id="s3" data-label="What It Is">
+    <div class="inner">
+      <div class="brow az">built in-house</div>
+      <h1 class="htitle">CodeReviewAgent — built here, owned here</h1>
+      <p class="lead">Not a third-party plugin. A first-party agent built on Azure Functions and Azure AI Foundry, integrated directly into ADO — so every instruction, every prompt layer, and every model choice is ours.</p>
+      <div class="built-strip">
+        <div class="bs" style="--c:var(--accent)">
+          <div class="bsl">Trigger layer</div>
+          <h3>Azure DevOps</h3>
+          <p>Listens for PR comment events. No new tooling for developers — they stay in the ADO PR they already have open.</p>
+        </div>
+        <div class="bs" style="--c:var(--azure)">
+          <div class="bsl">Runtime layer</div>
+          <h3>Azure Functions</h3>
+          <p>Serverless, event-driven. A webhook fires on a matching comment and the function handles the review lifecycle end to end.</p>
+        </div>
+        <div class="bs" style="--c:var(--warn)">
+          <div class="bsl">Intelligence layer</div>
+          <h3>Azure AI Foundry</h3>
+          <p>The model used for all review, security analysis, description and Q&amp;A — model choice and version are controlled by the team.</p>
+        </div>
+      </div>
+    </div>
+    <div class="snum"><b>04</b> / 14</div>
+  </section>
+
+  <!-- 05 COMMANDS ──────────────────────────────────────────────────────────── -->
+  <section class="slide" id="s4" data-label="Commands">
+    <div class="inner">
+      <div class="brow">@CodeReviewAgent</div>
+      <h1 class="htitle">Four commands, one place</h1>
+      <p class="lead">A developer mentions the agent in any PR comment. The command that follows determines what it does.</p>
+      <div class="cmd-grid">
+        <div class="cmd-card">
+          <div class="cmd-head">
+            <div class="cmd-token" style="--c:var(--accent)">/review</div>
+            <div class="cmd-badge">primary</div>
+          </div>
+          <div class="cmd-body">
+            <p>Full code review across all changed files. Checks code quality, logic, naming, error handling and best practices for each file's language.</p>
+            <div class="ex"><span class="pr">@nitro-team</span> opened this PR · 3 files changed<br><span class="ag">@CodeReviewAgent</span> <span class="cmd-t">/review</span></div>
+          </div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-head">
+            <div class="cmd-token" style="--c:var(--azure)">/ask</div>
+          </div>
+          <div class="cmd-body">
+            <p>Ask any question about the PR — design decisions, implementation alternatives, what a specific function does. Answers in context of the actual diff.</p>
+            <div class="ex"><span class="ag">@CodeReviewAgent</span> <span class="cmd-t">/ask</span> why is the retry logic here instead of the caller?</div>
+          </div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-head">
+            <div class="cmd-token" style="--c:var(--danger)">/security</div>
+          </div>
+          <div class="cmd-body">
+            <p>Dedicated security pass — injection risks, secret leakage, insecure deserialization, OWASP patterns, auth and permissions issues across the changed diff.</p>
+            <div class="ex"><span class="ag">@CodeReviewAgent</span> <span class="cmd-t">/security</span></div>
+          </div>
+        </div>
+        <div class="cmd-card">
+          <div class="cmd-head">
+            <div class="cmd-token" style="--c:var(--ok)">/describe</div>
+          </div>
+          <div class="cmd-body">
+            <p>Generates a structured PR description — what changed, why it matters, testing notes — useful for large PRs or when reviewers need a quick orient.</p>
+            <div class="ex"><span class="ag">@CodeReviewAgent</span> <span class="cmd-t">/describe</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="snum"><b>05</b> / 14</div>
+  </section>
+
+  <!-- 06 TRIGGER FLOW ─────────────────────────────────────────────────────── -->
+  <section class="slide" id="s5" data-label="Review Flow">
+    <div class="inner">
+      <div class="brow az">end to end</div>
+      <h1 class="htitle">From comment to review in seconds</h1>
+      <div class="tflow">
+        <div class="tflow-row">
+          <div class="tflow-icon" style="--c:var(--azure)">💬</div>
+          <div class="tflow-body">
+            <h4>Developer comments on the PR</h4>
+            <p>Any PR comment mentioning <span class="ic">@CodeReviewAgent</span> followed by a valid command is the trigger — no form, no UI, no new tab.</p>
+          </div>
+        </div>
+        <div class="tflow-row">
+          <div class="tflow-icon" style="--c:var(--azure)">🔔</div>
+          <div class="tflow-body">
+            <h4>ADO fires a webhook</h4>
+            <p>Azure DevOps emits a comment-created event to the registered Function endpoint. The function validates the payload and extracts the command.</p>
+            <span class="chip">POST /api/code-review-agent</span>
+          </div>
+        </div>
+        <div class="tflow-row">
+          <div class="tflow-icon" style="--c:var(--accent)">🏗️</div>
+          <div class="tflow-body">
+            <h4>Azure Function assembles the prompt</h4>
+            <p>It pulls the diff from ADO, identifies file types, and stacks the three prompt layers in order — base, then language (L1/L2), then repo instructions (L3).</p>
+          </div>
+        </div>
+        <div class="tflow-row">
+          <div class="tflow-icon" style="--c:var(--warn)">🧠</div>
+          <div class="tflow-body">
+            <h4>Foundry model reviews the diff</h4>
+            <p>The assembled prompt is sent to Azure AI Foundry. The model reads the code through the lens of all active instruction layers.</p>
+          </div>
+        </div>
+        <div class="tflow-row">
+          <div class="tflow-icon" style="--c:var(--ok)">✅</div>
+          <div class="tflow-body">
+            <h4>Response posted back to the PR</h4>
+            <p>The review, answer, security report, or description is posted as a new PR comment — appearing inline in the same conversation that triggered it.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="snum"><b>06</b> / 14</div>
+  </section>
+
+  <!-- 07 THREE LAYERS ─────────────────────────────────────────────────────── -->
+  <section class="slide" id="s6" data-label="Layer Architecture">
+    <div class="inner">
+      <div class="brow warn">prompt architecture — the core design</div>
+      <h1 class="htitle">Three layers of instruction</h1>
+      <p class="lead" style="margin-bottom:0;">Every review is assembled from three stacked prompt layers. Each one is additive — a later layer never replaces an earlier one, it extends it.</p>
+      <div class="layer-stage">
+        <div class="layer-stack" aria-label="Three stacked prompt layers visualization">
+          <div class="layer-plate l0">
+            <div class="lp-num">Base Layer — always active</div>
+            <div class="lp-title">Grounding &amp; Safety</div>
+            <div class="lp-sub">security · tone · output format · guardrails</div>
+          </div>
+          <div class="layer-plate l1">
+            <div class="lp-num">Layer 1 — always active</div>
+            <div class="lp-title">All Languages</div>
+            <div class="lp-sub">logic · naming · patterns · error handling</div>
+          </div>
+          <div class="layer-plate l2">
+            <div class="lp-num">Layer 2 — file-type matched</div>
+            <div class="lp-title">Language-Specific</div>
+            <div class="lp-sub">Review.sql.md · Review.cs.md · Review.ts.md · Review.tsx.md</div>
+          </div>
+        </div>
+        <div class="layer-desc">
+          <div class="ld" style="--ldc:var(--danger)">
+            <h4>Base layer — the floor</h4>
+            <p>Applied to every single request regardless of command or language. Sets the model's role, tone, output format, safety boundaries, and non-negotiable security checks. Cannot be overridden by later layers.</p>
+          </div>
+          <div class="ld" style="--ldc:var(--accent)">
+            <h4>Layer 1 — language-agnostic quality</h4>
+            <p>Default review prompts for code quality, readability, naming conventions, error handling and architectural patterns — applicable to every supported language without distinction.</p>
+          </div>
+          <div class="ld" style="--ldc:var(--azure)">
+            <h4>Layer 2 — language-specific depth</h4>
+            <p>Adds targeted checks per file type. A <span class="ic">.sql</span> file gets SQL-specific injection checks, index and query plan guidance. A <span class="ic">.ts</span> file gets strict-mode, type-safety and async-pattern review. Multiple layers activate in a single PR if it touches multiple file types.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="snum"><b>07</b> / 14</div>
+  </section>
+
+  <!-- 08 BASE LAYER ────────────────────────────────────────────────────────── -->
+  <section class="slide" id="s7" data-label="Base Layer">
+    <div class="inner">
+      <div class="brow warn">base layer</div>
+      <h1 class="htitle">Grounding, safety &amp; security — the non-negotiable floor</h1>
+      <p class="lead">The base layer is a constant. It defines how the agent behaves across every command, every repo, every file type. Subsequent layers add onto it — they cannot remove from it.</p>
+      <div class="lg-grid">
+        <div class="lgc">
+          <div class="lgc-head"><div class="dot" style="--dc:var(--danger)"></div><span>base-layer.md — safety &amp; guardrails</span></div>
+          <div class="lgc-body">
+            <p><strong style="color:var(--text)">Model grounding.</strong> Instructs the model to act as a code reviewer, not an assistant — focused, factual, and specific to the diff only.</p>
+            <p><strong style="color:var(--text)">No hallucinated references.</strong> The model may only reference what is visible in the changed files and the repository's declared dependencies.</p>
+            <p><strong style="color:var(--text)">Confidentiality.</strong> The agent never echoes back secrets, environment variables or credential-like strings it encounters in the diff.</p>
+            <p><strong style="color:var(--text)">Non-opinionated tone.</strong> Findings are reported as observations with rationale, not mandates — the developer retains decision authority.</p>
+          </div>
+        </div>
+        <div class="lgc">
+          <div class="lgc-head"><div class="dot" style="--dc:var(--warn)"></div><span>base-layer.md — always-on security</span></div>
+          <div class="lgc-body">
+            <p><strong style="color:var(--text)">Secret detection.</strong> Flags any string that looks like an API key, token, password or connection string — even in comments.</p>
+            <p><strong style="color:var(--text)">Injection surface.</strong> Checks every string-interpolation pattern that touches an external system (SQL, shell, XML, LDAP).</p>
+            <p><strong style="color:var(--text)">Auth and access.</strong> Flags missing authorisation checks, direct object references, and overly permissive roles.</p>
+            <p><strong style="color:var(--text)">Dependency flags.</strong> Notes newly added packages and recommends checking their vulnerability status.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="snum"><b>08</b> / 14</div>
+  </section>
+
+  <!-- 09 L1 + L2 ──────────────────────────────────────────────────────────── -->
+  <section class="slide" id="s8" data-label="L1 + L2 Prompts">
+    <div class="inner">
+      <div class="brow">layer 1 &amp; layer 2</div>
+      <h1 class="htitle">Language coverage — broad by default, deep when needed</h1>
+      <p class="lead">Layer 1 fires for every file. Layer 2 is matched per file extension — one review pass, multiple layers active simultaneously if the PR touches multiple languages.</p>
+      <div class="lg-grid">
+        <div class="lgc">
+          <div class="lgc-head"><div class="dot" style="--dc:var(--accent)"></div><span>Layer 1 — default.md · all languages</span></div>
+          <div class="lgc-body">
+            <p>Code clarity and naming conventions. Logic correctness and edge-case coverage. Error handling completeness. Dead code and redundant imports. Magic numbers and undocumented assumptions. Test coverage of new behaviour.</p>
+            <div class="langs">
+              <span class="lang">C#</span><span class="lang">TypeScript</span><span class="lang">JavaScript</span><span class="lang">SQL</span><span class="lang">Python</span><span class="lang">PowerShell</span><span class="lang">Bicep</span><span class="lang">YAML</span><span class="lang">JSON</span><span class="lang">+ any</span>
+            </div>
+          </div>
+        </div>
+        <div class="lgc">
+          <div class="lgc-head"><div class="dot" style="--dc:var(--azure)"></div><span>Layer 2 — file-matched specialist prompts</span></div>
+          <div class="lgc-body">
+            <p><strong style="color:var(--text)">Review.sql.md</strong> — parameterised queries, N+1 patterns, index usage, transaction scope, stored-proc risks.</p>
+            <p><strong style="color:var(--text)">Review.cs.md</strong> — nullable safety, async/await correctness, LINQ efficiency, DI pattern adherence, exception handling.</p>
+            <p><strong style="color:var(--text)">Review.ts.md</strong> — strict-mode types, any/unknown discipline, Promise chains, module boundaries.</p>
+            <p><strong style="color:var(--text)">Review.tsx.md</strong> — component decomposition, hook rules, memoisation, accessibility, key stability.</p>
+            <div class="langs">
+              <span class="lang" style="--lbc:rgba(76,168,240,.3);--lbg:rgba(76,168,240,.06);--ltc:var(--azure)">.sql</span>
+              <span class="lang" style="--lbc:rgba(76,168,240,.3);--lbg:rgba(76,168,240,.06);--ltc:var(--azure)">.cs</span>
+              <span class="lang" style="--lbc:rgba(76,168,240,.3);--lbg:rgba(76,168,240,.06);--ltc:var(--azure)">.ts</span>
+              <span class="lang" style="--lbc:rgba(76,168,240,.3);--lbg:rgba(76,168,240,.06);--ltc:var(--azure)">.tsx</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="snum"><b>09</b> / 14</div>
+  </section>
+
+  <!-- 10 LAYER 3 ───────────────────────────────────────────────────────────── -->
+  <section class="slide" id="s9" data-label="Layer 3">
+    <div class="inner">
+      <div class="brow ok">layer 3 — optional, per-repo</div>
+      <h1 class="htitle">Customised per repository</h1>
+      <p class="lead">Any repo can pass its own review instructions by placing a file in its root. The agent picks them up automatically — no deployment or configuration change required.</p>
+      <div class="repo-twocol">
+        <div class="code-block">
+          <div class="cb-head">📁 repo-root / .github / instructions</div>
+          <div class="cb-body">
+<span class="cm"># repo-specific instructions for CodeReviewAgent</span>
+<span class="cm"># picked up automatically when this repo is reviewed</span>
+
+<span class="ky">focus_areas</span>:
+  - <span class="vl">Performance: flag any DB call inside a loop</span>
+  - <span class="vl">Naming: follow our domain-model glossary</span>
+  - <span class="vl">Auth: all API endpoints must have [Authorize]</span>
+
+<span class="ky">suppress</span>:
+  - <span class="vl">line-length warnings (we use 140-char width)</span>
+
+<span class="ky">style</span>:
+  - <span class="vl">Use our internal terminology: "Member" not "User"</span>
+  - <span class="vl">Reference ADO work items where known</span>
+</div>
+        </div>
+        <div class="repo-list">
+          <div class="rli">
+            <div class="rli-ic">01</div>
+            <p><b>Zero deployment needed.</b> The agent checks for the file at review time. Add or edit it and the next review uses it — no PR to the agent repo required.</p>
+          </div>
+          <div class="rli">
+            <div class="rli-ic">02</div>
+            <p><b>Additive, not overriding.</b> Layer 3 instructions extend the base and language layers — they cannot suppress the base layer's safety and security checks.</p>
+          </div>
+          <div class="rli">
+            <div class="rli-ic">03</div>
+            <p><b>Context-aware terminology.</b> If your domain uses specific names for entities, components or patterns, put them here — the agent will use and recognise them.</p>
+          </div>
+          <div class="rli">
+            <div class="rli-ic">04</div>
+            <p><b>Team-owned, version-controlled.</b> The file lives in the repo, so changes are reviewed and tracked like any other configuration decision.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="snum"><b>10</b> / 14</div>
+  </section>
+
+  <!-- 11 ARCHITECTURE ─────────────────────────────────────────────────────── -->
+  <section class="slide" id="s10" data-label="Architecture">
+    <div class="inner">
+      <div class="brow az">architecture</div>
+      <h1 class="htitle">System design</h1>
+      <p class="lead">The agent is a thin orchestration layer — ADO owns the code and the conversation thread; Azure Functions owns the logic; Foundry owns the intelligence.</p>
+      <div class="arch-frame">
+        <div class="arch-label">architecture diagram — placeholder for detailed design</div>
+        <div class="arch-nodes">
+          <div class="arch-node">
+            <div class="icn">👤</div>
+            <div class="ln">Developer</div>
+            <div class="nm">PR Comment</div>
+          </div>
+          <div class="arch-arr">──▶</div>
+          <div class="arch-node hi">
+            <div class="icn">📋</div>
+            <div class="ln">Azure DevOps</div>
+            <div class="nm">Webhook</div>
+          </div>
+          <div class="arch-arr">──▶</div>
+          <div class="arch-node hi">
+            <div class="icn">⚡</div>
+            <div class="ln">Azure Functions</div>
+            <div class="nm">Orchestrator</div>
+          </div>
+          <div class="arch-arr">──▶</div>
+          <div class="arch-node">
+            <div class="icn">🧠</div>
+            <div class="ln">Azure AI Foundry</div>
+            <div class="nm">Model</div>
+          </div>
+        </div>
+        <div style="margin-top:1.5rem; display:flex; gap:.8rem; justify-content:center; flex-wrap:wrap;">
+          <div class="arch-node" style="min-width:90px;">
+            <div class="icn">📁</div>
+            <div class="ln">ADO</div>
+            <div class="nm">PR Diff</div>
+          </div>
+          <div class="arch-arr" style="align-self:center;">──▶</div>
+          <div class="arch-node" style="min-width:90px;">
+            <div class="icn">📝</div>
+            <div class="ln">Functions</div>
+            <div class="nm">Layer Stack</div>
+          </div>
+          <div class="arch-arr" style="align-self:center;">◀──</div>
+          <div class="arch-node" style="min-width:90px;">
+            <div class="icn">📂</div>
+            <div class="ln">Repo Root</div>
+            <div class="nm">.github/instructions</div>
+          </div>
+        </div>
+        <div class="arch-note">// detailed sequence diagram and infra-as-code diagram to be added here</div>
+      </div>
+    </div>
+    <div class="snum"><b>11</b> / 14</div>
+  </section>
+
+  <!-- 12 ANALYTICS ────────────────────────────────────────────────────────── -->
+  <section class="slide" id="s11" data-label="Analytics">
+    <div class="inner">
+      <div class="brow ok">analytics — sample data</div>
+      <h1 class="htitle">Review metrics at a glance</h1>
+      <p class="lead" style="margin-bottom:0;">Tracking volume, cost efficiency and adoption across teams — sample figures, replace with live data from your telemetry pipeline.</p>
+      <div class="metrics-row">
+        <div class="metric">
+          <div class="mt">PRs REVIEWED · 30 DAYS</div>
+          <div class="mv" style="--mc:var(--accent);--mc2:#5540FF">247</div>
+          <div class="ms">↑ 18% from last month</div>
+        </div>
+        <div class="metric">
+          <div class="mt">REVIEWS POSTED</div>
+          <div class="mv" style="--mc:var(--azure);--mc2:#2F7EC7">614</div>
+          <div class="ms">avg 2.5 per PR</div>
+        </div>
+        <div class="metric">
+          <div class="mt">COST PER REVIEW</div>
+          <div class="mv" style="--mc:var(--ok);--mc2:#2BA89E">$0.04</div>
+          <div class="ms">tokens · Foundry pricing</div>
+        </div>
+        <div class="metric">
+          <div class="mt">SECURITY ISSUES FLAGGED</div>
+          <div class="mv" style="--mc:var(--warn);--mc2:#CC7A00">38</div>
+          <div class="ms warn">12 high · 26 medium</div>
+        </div>
+      </div>
+      <div class="analytics-lower">
+        <div class="bar-chart">
+          <h4>Reviews by command — last 30 days</h4>
+          <div class="bar-row">
+            <div class="bar-label">/review</div>
+            <div class="bar-track"><div class="bar-fill" style="--bc:var(--accent);width:82%"></div></div>
+            <div class="bar-val">82%</div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">/security</div>
+            <div class="bar-track"><div class="bar-fill" style="--bc:var(--danger);width:9%"></div></div>
+            <div class="bar-val">9%</div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">/ask</div>
+            <div class="bar-track"><div class="bar-fill" style="--bc:var(--azure);width:6%"></div></div>
+            <div class="bar-val">6%</div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">/describe</div>
+            <div class="bar-track"><div class="bar-fill" style="--bc:var(--ok);width:3%"></div></div>
+            <div class="bar-val">3%</div>
+          </div>
+          <div style="margin-top:1.2rem;border-top:1px solid var(--border-soft);padding-top:1rem;">
+            <h4 style="margin-bottom:.8rem;">Review findings breakdown</h4>
+            <div class="bar-row">
+              <div class="bar-label">Quality</div>
+              <div class="bar-track"><div class="bar-fill" style="--bc:var(--accent);width:51%"></div></div>
+              <div class="bar-val">51%</div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-label">Security</div>
+              <div class="bar-track"><div class="bar-fill" style="--bc:var(--danger);width:24%"></div></div>
+              <div class="bar-val">24%</div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-label">Performance</div>
+              <div class="bar-track"><div class="bar-fill" style="--bc:var(--warn);width:16%"></div></div>
+              <div class="bar-val">16%</div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-label">Tests</div>
+              <div class="bar-track"><div class="bar-fill" style="--bc:var(--ok);width:9%"></div></div>
+              <div class="bar-val">9%</div>
+            </div>
+          </div>
+        </div>
+        <div class="pr-table">
+          <h4>Top repos by PR volume</h4>
+          <div class="pr-row">
+            <div class="repo-n">platform/api-gateway</div>
+            <div class="pr-c">54</div>
+            <div class="pr-s" style="--bc:rgba(124,110,255,.3);--tc:var(--accent)">L3 active</div>
+          </div>
+          <div class="pr-row">
+            <div class="repo-n">apps/web-portal</div>
+            <div class="pr-c">41</div>
+            <div class="pr-s" style="--bc:rgba(124,110,255,.3);--tc:var(--accent)">L3 active</div>
+          </div>
+          <div class="pr-row">
+            <div class="repo-n">data/reporting-svc</div>
+            <div class="pr-c">38</div>
+            <div class="pr-s" style="--bc:rgba(74,84,104,.4);--tc:var(--text-faint)">base only</div>
+          </div>
+          <div class="pr-row">
+            <div class="repo-n">infra/bicep-modules</div>
+            <div class="pr-c">27</div>
+            <div class="pr-s" style="--bc:rgba(74,84,104,.4);--tc:var(--text-faint)">base only</div>
+          </div>
+          <div class="pr-row">
+            <div class="repo-n">libs/shared-ui</div>
+            <div class="pr-c">22</div>
+            <div class="pr-s" style="--bc:rgba(124,110,255,.3);--tc:var(--accent)">L3 active</div>
+          </div>
+          <div class="pr-row">
+            <div class="repo-n">apps/mobile-bff</div>
+            <div class="pr-c">19</div>
+            <div class="pr-s" style="--bc:rgba(74,84,104,.4);--tc:var(--text-faint)">base only</div>
+          </div>
+          <div class="pr-row" style="background:rgba(124,110,255,.04)">
+            <div class="repo-n" style="color:var(--text-faint)">+ 14 more repos</div>
+            <div class="pr-c" style="color:var(--text-dim)">46</div>
+            <div class="pr-s" style="--bc:rgba(74,84,104,.3);--tc:var(--text-faint)">various</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="snum"><b>12</b> / 14</div>
+  </section>
+
+  <!-- 13 BENEFITS + GUARDRAILS ─────────────────────────────────────────────── -->
+  <section class="slide" id="s12" data-label="Benefits">
+    <div class="inner">
+      <div class="brow ok">outcomes &amp; guardrails</div>
+      <h1 class="htitle">What it changes — and where humans stay in the loop</h1>
+      <div class="ben-grid">
+        <div class="ben"><div class="bt">speed</div><h4>Instant first feedback</h4><p>A developer gets structured feedback within seconds of posting the command — no waiting for a reviewer's calendar to clear.</p></div>
+        <div class="ben"><div class="bt">consistency</div><h4>Same depth on every PR</h4><p>The base and language layers don't have bad days. Every file gets the same security and quality pass, regardless of PR size or reviewer availability.</p></div>
+        <div class="ben"><div class="bt">security</div><h4>Security on every diff</h4><p>The base layer's always-on security check means no file reaches main without at least a first-pass scan for common vulnerabilities.</p></div>
+        <div class="ben"><div class="bt">adoption</div><h4>Zero new tooling for devs</h4><p>Developers stay in ADO. One comment is the entire interface — no new dashboard, no plugin, no context switch.</p></div>
+      </div>
+      <div class="guard-grid" style="margin-top:1.2rem;">
+        <div class="guard"><div class="gn">GUARDRAIL 01</div><h4>Advisory only</h4><p>The agent cannot merge, approve, or block PRs. All its output is a comment. The pull-request decision always belongs to a human reviewer.</p></div>
+        <div class="guard"><div class="gn">GUARDRAIL 02</div><h4>No secrets echoed</h4><p>The base layer instructs the model to never repeat credential-like strings from the diff, even in its analysis output.</p></div>
+        <div class="guard"><div class="gn">GUARDRAIL 03</div><h4>Diff-scoped only</h4><p>The model is given only the changed files, not the entire repository history — limiting both scope and cost per review call.</p></div>
+        <div class="guard"><div class="gn">GUARDRAIL 04</div><h4>L3 cannot override safety</h4><p>Repo-specific instructions are additive. No Layer 3 instruction can suppress base-layer security checks or change the agent's fundamental output format.</p></div>
+      </div>
+    </div>
+    <div class="snum"><b>13</b> / 14</div>
+  </section>
+
+  <!-- 14 NEXT STEPS ────────────────────────────────────────────────────────── -->
+  <section class="slide" id="s13" data-label="Next Steps">
+    <div class="inner">
+      <div class="brow">roadmap</div>
+      <h1 class="htitle">Where we go from here</h1>
+      <div class="roadmap">
+        <div class="ri"><span class="rq">01</span><p><b>More language-specific prompt files.</b> Python, PowerShell and Bicep to join the Layer 2 roster — each with infrastructure-specific security checks.</p></div>
+        <div class="ri"><span class="rq">02</span><p><b>Live analytics dashboard.</b> Replace the sample metrics with a real-time view sourced from Function telemetry and ADO API data — cost, volume, issue-rate by repo.</p></div>
+        <div class="ri"><span class="rq">03</span><p><b>PR thread awareness.</b> Allow <span class="ic">/ask</span> to reference the existing review comments in its context — enabling a genuine back-and-forth conversation about the code, not just a one-shot answer.</p></div>
+        <div class="ri"><span class="rq">04</span><p><b>Onboard all active repos.</b> Work with each team to author their Layer 3 instructions file — making the first-pass review immediately relevant to their domain and conventions.</p></div>
+        <div class="ri"><span class="rq">05</span><p><b>Architecture documentation.</b> Sequence diagram and infrastructure-as-code diagram to be finalised and added to the architecture slide.</p></div>
+      </div>
+      <div class="closing-cta">
+        <div class="big">Questions, or want to try<br><span class="hi">@CodeReviewAgent /review</span> live?</div>
+        <div style="font-family:var(--font-m); font-size:.78rem; color:var(--text-faint);">🤖 grounded · layered · repo-aware</div>
+      </div>
+    </div>
+    <div class="snum"><b>14</b> / 14</div>
+  </section>
+
+</main>
+
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  const rail   = document.getElementById('rail');
+  const bar    = document.getElementById('progressBar');
+  const deck   = document.getElementById('deck');
+
+  slides.forEach((s, i) => {
+    const d = document.createElement('button');
+    d.className  = 'rdot';
+    d.setAttribute('aria-label', s.dataset.label || 'Slide ' + (i + 1));
+    d.addEventListener('click', () => s.scrollIntoView({ behavior: 'smooth' }));
+    rail.appendChild(d);
+  });
+  const dots = [...rail.querySelectorAll('.rdot')];
+
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting && e.intersectionRatio > 0.55) {
+        const i = slides.indexOf(e.target);
+        dots.forEach(d => d.classList.remove('on'));
+        if (dots[i]) dots[i].classList.add('on');
+      }
+    });
+  }, { root: deck, threshold: [0.55] });
+  slides.forEach(s => io.observe(s));
+
+  const updateBar = () => {
+    const m = deck.scrollHeight - deck.clientHeight;
+    bar.style.width = m > 0 ? ((deck.scrollTop / m) * 100) + '%' : '0%';
+  };
+  deck.addEventListener('scroll', updateBar, { passive: true });
+  updateBar();
+
+  function currentIdx() {
+    let best = 0, dist = Infinity;
+    slides.forEach((s, i) => {
+      const d = Math.abs(s.getBoundingClientRect().top);
+      if (d < dist) { dist = d; best = i; }
+    });
+    return best;
+  }
+
+  window.addEventListener('keydown', e => {
+    if (['ArrowDown','PageDown',' '].includes(e.key)) {
+      e.preventDefault();
+      slides[Math.min(currentIdx() + 1, slides.length - 1)].scrollIntoView({ behavior: 'smooth' });
+    } else if (['ArrowUp','PageUp'].includes(e.key)) {
+      e.preventDefault();
+      slides[Math.max(currentIdx() - 1, 0)].scrollIntoView({ behavior: 'smooth' });
+    }
+  });
+</script>
+</body>
+</html>
