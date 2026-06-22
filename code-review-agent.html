@@ -3,1244 +3,1142 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CodeReviewAgent — Automated AI Code Review</title>
+<title>CodeReviewAgent — Technical Architecture</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/typed.js@2.1.0/dist/typed.umd.js" defer></script>
 <style>
-  /* ─── design tokens ────────────────────────────────────────────────────── */
-  :root {
-    --bg:          #0D0F15;
-    --surface:     #131620;
-    --surface-2:   #191D28;
-    --border:      #252B38;
-    --border-soft: #1C2130;
-    --text:        #E8ECF4;
-    --text-dim:    #8A96A8;
-    --text-faint:  #4A5468;
-    --accent:      #7C6EFF;   /* electric indigo — signature */
-    --azure:       #4CA8F0;   /* ADO / Azure */
-    --warn:        #FFB347;   /* security / amber */
-    --ok:          #4ECDC4;   /* pass / teal */
-    --danger:      #FF6B6B;
-    --r:           10px;
-    --font-d: 'Space Grotesk', sans-serif;
-    --font-b: 'Inter', -apple-system, sans-serif;
-    --font-m: 'JetBrains Mono', monospace;
-  }
-
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-  html, body {
-    height: 100%;
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font-b);
-    -webkit-font-smoothing: antialiased;
-  }
-
-  body {
-    /* subtle hex grid — different from the dot-grid in the Playwright deck */
-    background-image:
-      linear-gradient(0deg,   transparent 24%, rgba(255,255,255,0.025) 25%, rgba(255,255,255,0.025) 26%, transparent 27%, transparent 74%, rgba(255,255,255,0.025) 75%, rgba(255,255,255,0.025) 76%, transparent 77%),
-      linear-gradient(90deg,  transparent 24%, rgba(255,255,255,0.025) 25%, rgba(255,255,255,0.025) 26%, transparent 27%, transparent 74%, rgba(255,255,255,0.025) 75%, rgba(255,255,255,0.025) 76%, transparent 77%);
-    background-size: 38px 38px;
-  }
-
-  ::selection { background: var(--accent); color: #0c0820; }
-
-  /* ─── PCB circuit-trace background ─────────────────────────────────────── */
-  .bg-pcb {
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    pointer-events: none;
-    overflow: hidden;
-  }
-  /* single faint scan-beam diagonal wash */
-  .bg-pcb::before {
-    content: "";
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: linear-gradient(
-      132deg,
-      transparent 0%,
-      transparent 38%,
-      rgba(76,168,240,0.03) 44%,
-      transparent 50%
-    );
-  }
-  .pcb-svg {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-  }
-  .pcb-trace { fill: none; stroke: rgba(76,168,240,0.18); stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
-  .pcb-pad   { fill: rgba(76,168,240,0.22); }
-  .pcb-pad-r { fill: none; stroke: rgba(76,168,240,0.12); stroke-width: 1; }
-  .pcb-via   { fill: none; stroke: rgba(76,168,240,0.16); stroke-width: 1; }
-
-  /* ─── progress bar ──────────────────────────────────────────────────────── */
-  .progress { position: fixed; top: 0; left: 0; width: 100%; height: 2px; background: var(--border-soft); z-index: 90; }
-  .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--azure), var(--ok)); transition: width .1s; }
-
-  /* ─── rail nav ──────────────────────────────────────────────────────────── */
-  .rail {
-    position: fixed; left: 1.4rem; top: 50%; transform: translateY(-50%);
-    display: flex; flex-direction: column; align-items: center; gap: 11px; z-index: 80;
-  }
-  .rail::before {
-    content: ""; position: absolute; top: -20px; bottom: -20px; left: 50%;
-    width: 1px; background: var(--border); transform: translateX(-50%); z-index: -1;
-  }
-  .rdot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--border); border: 1px solid var(--border-soft);
-    cursor: pointer; transition: background .2s, transform .2s, box-shadow .2s; flex-shrink: 0;
-  }
-  .rdot:hover { background: var(--text-faint); }
-  .rdot.on {
-    background: var(--accent); border-color: var(--accent); transform: scale(1.4);
-    box-shadow: 0 0 0 4px rgba(124,110,255,0.18);
-  }
-
-  /* ─── deck + slides ─────────────────────────────────────────────────────── */
-  .deck {
-    height: 100vh; overflow-y: scroll;
-    scroll-snap-type: y mandatory; scroll-behavior: smooth;
-    position: relative; z-index: 1;
-  }
-  .slide {
-    min-height: 100vh; width: 100%; scroll-snap-align: start;
-    display: flex; flex-direction: column; justify-content: center;
-    padding: clamp(2.5rem,6vw,5.5rem) clamp(1.5rem,10vw,8.5rem);
-    border-bottom: 1px solid var(--border-soft); position: relative;
-  }
-  .inner { max-width: 1200px; margin: 0 auto; width: 100%; }
-
-  .snum {
-    position: absolute; bottom: 2rem; right: 3rem;
-    font-family: var(--font-m); font-size: .76rem; color: var(--text-faint);
-  }
-  .snum b { color: var(--text-dim); font-weight: 500; }
-
-  /* ─── shared text ───────────────────────────────────────────────────────── */
-  .brow {
-    font-family: var(--font-m); font-size: .76rem; letter-spacing: .05em;
-    color: var(--accent); display: inline-flex; align-items: center; gap: .5em;
-    margin-bottom: 1.2rem;
-  }
-  .brow::before { content: "//"; color: var(--text-faint); margin-right: .15em; }
-  .brow.az { color: var(--azure); }
-  .brow.warn { color: var(--warn); }
-  .brow.ok { color: var(--ok); }
-
-  h1.htitle {
-    font-family: var(--font-d); font-weight: 600;
-    font-size: clamp(2rem, 4.2vw, 3.5rem);
-    line-height: 1.08; letter-spacing: -.01em; margin-bottom: 1.1rem;
-  }
-  p.lead { color: var(--text-dim); font-size: 1.05rem; line-height: 1.65; max-width: 66ch; }
-  .sub { color: var(--text-dim); font-size: .9rem; line-height: 1.55; }
-  .ic {
-    font-family: var(--font-m); font-size: .82em;
-    background: var(--surface-2); border: 1px solid var(--border);
-    padding: .1em .45em; border-radius: 5px; color: #BDB3FF;
-  }
-
-  /* ─── title slide specific ───────────────────────────────────────────────── */
-  .title-eyebrow {
-    font-family: var(--font-m); font-size: .78rem; letter-spacing: .06em;
-    color: var(--accent); margin-bottom: 1.4rem; opacity: .7;
-  }
-  .title-eyebrow::before { content: "// "; }
-  .title-agent {
-    display: inline-flex; align-items: center; gap: .8rem; margin-bottom: 2rem;
-  }
-  .agent-icon {
-    width: 56px; height: 56px; border-radius: 14px;
-    background: linear-gradient(135deg, var(--accent) 0%, #5540FF 100%);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.5rem; flex-shrink: 0;
-    box-shadow: 0 0 0 1px rgba(124,110,255,.4), 0 0 32px rgba(124,110,255,.2);
-  }
-  .title-meta {
-    margin-top: 2.5rem; display: flex; flex-wrap: wrap; gap: 2rem;
-    font-family: var(--font-m); font-size: .8rem; color: var(--text-faint);
-  }
-  .title-meta span b { color: var(--text-dim); font-weight: 500; }
-
-  /* ─── agenda ──────────────────────────────────────────────────────────────── */
-  .agenda { margin-top: 1.8rem; }
-  .ai {
-    display: flex; align-items: baseline; gap: 1.2rem;
-    padding: .8rem 0; border-bottom: 1px solid var(--border-soft);
-  }
-  .ai:first-child { border-top: 1px solid var(--border-soft); }
-  .an { font-family: var(--font-m); color: var(--text-faint); font-size: .8rem; width: 2ch; }
-  .at { font-size: 1rem; color: var(--text); font-weight: 500; }
-  .atag { margin-left: auto; font-family: var(--font-m); font-size: .7rem;
-    color: var(--accent); opacity: .7; }
-  .atag.az { color: var(--azure); }
-  .atag.warn { color: var(--warn); }
-
-  /* ─── problem grid ────────────────────────────────────────────────────────── */
-  .prob-grid {
-    margin-top: 2rem; display: grid;
-    grid-template-columns: repeat(3, 1fr); gap: 1px;
-    background: var(--border-soft); border: 1px solid var(--border-soft);
-    border-radius: var(--r); overflow: hidden;
-  }
-  .prob {
-    background: var(--surface); padding: 1.5rem 1.4rem;
-  }
-  .prob-n { font-family: var(--font-m); font-size: .7rem; color: var(--danger); margin-bottom: .55rem; }
-  .prob h3 { font-family: var(--font-d); font-size: 1rem; font-weight: 600; color: var(--text); margin-bottom: .45rem; }
-  .prob p { color: var(--text-dim); font-size: .88rem; line-height: 1.52; }
-
-  /* ─── how-built strip ──────────────────────────────────────────────────────── */
-  .built-strip {
-    margin-top: 2rem; display: grid; grid-template-columns: repeat(3,1fr); gap: 1.1rem;
-  }
-  .bs {
-    border: 1px solid var(--border); border-radius: var(--r);
-    padding: 1.4rem 1.3rem; background: var(--surface);
-    border-top: 3px solid var(--c, var(--border));
-  }
-  .bs .bsl { font-family: var(--font-m); font-size: .7rem; color: var(--c, var(--text-faint)); margin-bottom: .55rem; text-transform: uppercase; letter-spacing: .04em; }
-  .bs h3 { font-family: var(--font-d); font-size: 1.05rem; font-weight: 600; color: var(--text); margin-bottom: .35rem; }
-  .bs p { color: var(--text-dim); font-size: .88rem; line-height: 1.5; }
-
-  /* ─── command cards ─────────────────────────────────────────────────────────── */
-  .cmd-grid { margin-top: 2rem; display: grid; grid-template-columns: repeat(2,1fr); gap: 1.1rem; }
-  .cmd-card {
-    border: 1px solid var(--border); border-radius: var(--r); overflow: hidden;
-    background: var(--surface);
-  }
-  .cmd-head {
-    padding: .9rem 1.2rem; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: .7rem; background: var(--surface-2);
-  }
-  .cmd-token {
-    font-family: var(--font-m); font-size: .95rem; font-weight: 600;
-    color: var(--c, var(--accent)); letter-spacing: .01em;
-  }
-  .cmd-badge {
-    margin-left: auto; font-family: var(--font-m); font-size: .68rem;
-    padding: .18rem .55rem; border-radius: 99px;
-    background: rgba(124,110,255,.1); border: 1px solid rgba(124,110,255,.2);
-    color: var(--accent);
-  }
-  .cmd-body { padding: 1.2rem 1.3rem; }
-  .cmd-body p { color: var(--text-dim); font-size: .9rem; line-height: 1.55; }
-  .cmd-body .ex {
-    margin-top: .9rem; background: #0a0c12; border: 1px solid var(--border);
-    border-radius: 7px; padding: .7rem 1rem;
-    font-family: var(--font-m); font-size: .78rem; color: var(--text-faint);
-  }
-  .cmd-body .ex .pr { color: var(--azure); }
-  .cmd-body .ex .ag { color: var(--accent); }
-  .cmd-body .ex .cmd-t { color: var(--ok); }
-
-  /* ─── trigger flow ──────────────────────────────────────────────────────────── */
-  .tflow { margin-top: 2rem; }
-  .tflow-row {
-    display: flex; align-items: flex-start; gap: 1.1rem; position: relative;
-    padding-bottom: 1.5rem;
-  }
-  .tflow-row:not(:last-child)::before {
-    content: ""; position: absolute;
-    left: 20px; top: 43px; bottom: 0; width: 1px; background: var(--border);
-  }
-  .tflow-icon {
-    width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0;
-    border: 1px solid var(--c, var(--border)); background: var(--surface);
-    display: flex; align-items: center; justify-content: center;
-    font-size: .85rem; z-index: 1;
-  }
-  .tflow-body h4 { font-family: var(--font-d); font-size: 1rem; font-weight: 600; color: var(--text); margin-bottom: .25rem; }
-  .tflow-body p { color: var(--text-dim); font-size: .88rem; line-height: 1.52; max-width: 64ch; }
-  .tflow-body .chip {
-    display: inline-block; margin-top: .45rem;
-    font-family: var(--font-m); font-size: .72rem;
-    background: var(--surface-2); border: 1px solid var(--border); color: var(--text-faint);
-    padding: .14rem .5rem; border-radius: 5px;
-  }
-
-  /* ─── THREE-LAYER SIGNATURE ELEMENT ──────────────────────────────────────── */
-  .layer-stage {
-    margin-top: 2.2rem;
-    display: flex;
-    gap: 3rem;
-    align-items: flex-start;
-  }
-  .layer-stack {
-    flex-shrink: 0;
-    position: relative;
-    width: 340px;
-    height: 300px;
-    perspective: 900px;
-  }
-  .layer-plate {
-    position: absolute;
-    left: 0; right: 0;
-    border-radius: 12px;
-    border: 1px solid var(--bc, var(--border));
-    background: var(--bk, var(--surface));
-    padding: 1.1rem 1.4rem;
-    transform-style: preserve-3d;
-  }
-  .layer-plate.l0 {
-    --bc: rgba(255,107,107,.35);
-    --bk: rgba(20,14,18,0.96);
-    top: 0;
-    width: 100%;
-    transform: rotateX(8deg) translateY(0px);
-    box-shadow: 0 2px 20px rgba(0,0,0,.4), 0 0 0 1px rgba(255,107,107,.08);
-  }
-  .layer-plate.l1 {
-    --bc: rgba(124,110,255,.4);
-    --bk: rgba(16,15,24,0.96);
-    top: 86px;
-    width: 96%;
-    left: 2%;
-    transform: rotateX(8deg) translateY(0px);
-    box-shadow: 0 2px 20px rgba(0,0,0,.5), 0 0 0 1px rgba(124,110,255,.1);
-  }
-  .layer-plate.l2 {
-    --bc: rgba(76,168,240,.4);
-    --bk: rgba(12,16,22,0.96);
-    top: 172px;
-    width: 92%;
-    left: 4%;
-    transform: rotateX(8deg) translateY(0px);
-    box-shadow: 0 2px 20px rgba(0,0,0,.6), 0 0 0 1px rgba(76,168,240,.08);
-  }
-  .lp-num { font-family: var(--font-m); font-size: .68rem; color: var(--lc, var(--text-faint)); text-transform: uppercase; letter-spacing: .06em; margin-bottom: .3rem; }
-  .lp-title { font-family: var(--font-d); font-size: .96rem; font-weight: 600; color: var(--text); margin-bottom: .2rem; }
-  .lp-sub { font-family: var(--font-m); font-size: .72rem; color: var(--text-faint); }
-  .l0 .lp-num { --lc: var(--danger); }
-  .l1 .lp-num { --lc: var(--accent); }
-  .l2 .lp-num { --lc: var(--azure); }
-
-  .layer-desc { flex: 1; display: flex; flex-direction: column; gap: 1rem; }
-  .ld {
-    padding: 1.1rem 1.2rem; border: 1px solid var(--border); border-radius: var(--r);
-    background: var(--surface); border-left: 3px solid var(--ldc, var(--border));
-  }
-  .ld h4 { font-family: var(--font-d); font-weight: 600; font-size: .98rem; color: var(--text); margin-bottom: .3rem; }
-  .ld p { color: var(--text-dim); font-size: .88rem; line-height: 1.52; }
-
-  /* ─── layer detail grids ────────────────────────────────────────────────────── */
-  .lg-grid {
-    margin-top: 2rem; display: grid; grid-template-columns: repeat(2,1fr); gap: 1.1rem;
-  }
-  .lgc {
-    border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
-    overflow: hidden;
-  }
-  .lgc-head {
-    padding: .75rem 1.1rem; border-bottom: 1px solid var(--border);
-    background: var(--surface-2);
-    display: flex; align-items: center; gap: .6rem;
-  }
-  .lgc-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dc, var(--text-faint)); flex-shrink: 0; }
-  .lgc-head span { font-family: var(--font-m); font-size: .74rem; color: var(--text-dim); }
-  .lgc-body { padding: 1.1rem 1.2rem; }
-  .lgc-body p { color: var(--text-dim); font-size: .88rem; line-height: 1.52; margin-bottom: .55rem; }
-  .lgc-body p:last-child { margin-bottom: 0; }
-
-  /* ─── lang chips ─────────────────────────────────────────────────────────────── */
-  .langs { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: 1.1rem; }
-  .lang {
-    font-family: var(--font-m); font-size: .72rem;
-    padding: .22rem .65rem; border-radius: 5px;
-    border: 1px solid var(--lbc, var(--border));
-    background: var(--lbg, var(--surface-2)); color: var(--ltc, var(--text-faint));
-  }
-
-  /* ─── repo box ──────────────────────────────────────────────────────────────── */
-  .repo-twocol { display: grid; grid-template-columns: 1fr 1.1fr; gap: 2rem; margin-top: 2rem; }
-  .code-block {
-    background: #080A10; border: 1px solid var(--border);
-    border-radius: var(--r); overflow: hidden;
-  }
-  .cb-head {
-    padding: .6rem 1rem; background: var(--surface-2); border-bottom: 1px solid var(--border);
-    font-family: var(--font-m); font-size: .7rem; color: var(--text-faint);
-  }
-  .cb-body { padding: 1.2rem 1.3rem; font-family: var(--font-m); font-size: .8rem; line-height: 1.75; color: var(--text-dim); }
-  .cb-body .cm { color: var(--text-faint); }
-  .cb-body .ky { color: #BDB3FF; }
-  .cb-body .vl { color: #8BE8A4; }
-
-  .repo-list { display: flex; flex-direction: column; gap: .95rem; }
-  .rli { display: flex; gap: .8rem; align-items: flex-start; }
-  .rli-ic {
-    width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0; margin-top: .1rem;
-    display: flex; align-items: center; justify-content: center;
-    background: rgba(76,168,240,.1); color: var(--azure); font-size: .72rem; font-family: var(--font-m);
-  }
-  .rli p { color: var(--text-dim); font-size: .9rem; line-height: 1.52; }
-  .rli p b { color: var(--text); font-weight: 600; }
-
-  /* ─── ARCHITECTURE PLACEHOLDER ──────────────────────────────────────────────── */
-  .arch-frame {
-    margin-top: 2rem; border: 1px dashed rgba(76,168,240,.25);
-    border-radius: var(--r); background: rgba(76,168,240,.025);
-    padding: 2rem; display: flex; flex-direction: column; align-items: center;
-  }
-  .arch-label {
-    font-family: var(--font-m); font-size: .7rem; color: rgba(76,168,240,.35);
-    letter-spacing: .12em; text-transform: uppercase; margin-bottom: 2rem;
-  }
-  .arch-nodes {
-    display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; justify-content: center;
-  }
-  .arch-node {
-    border: 1px solid var(--border); border-radius: var(--r);
-    background: var(--surface); padding: .9rem 1.2rem;
-    display: flex; flex-direction: column; align-items: center; gap: .4rem;
-    min-width: 120px; text-align: center;
-  }
-  .arch-node .icn { font-size: 1.3rem; }
-  .arch-node .ln { font-family: var(--font-m); font-size: .7rem; color: var(--text-faint); }
-  .arch-node .nm { font-family: var(--font-d); font-weight: 600; font-size: .88rem; color: var(--text); }
-  .arch-node.hi { border-color: var(--accent); background: rgba(124,110,255,.05); }
-  .arch-arr { color: var(--text-faint); font-size: .9rem; font-family: var(--font-m); }
-  .arch-note {
-    margin-top: 1.8rem; font-family: var(--font-m); font-size: .72rem;
-    color: rgba(76,168,240,.3); letter-spacing: .06em;
-  }
-
-  /* ─── ANALYTICS ─────────────────────────────────────────────────────────────── */
-  .metrics-row {
-    margin-top: 2rem; display: grid; grid-template-columns: repeat(4,1fr); gap: 1.1rem;
-  }
-  .metric {
-    border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
-    padding: 1.3rem 1.2rem;
-  }
-  .metric .mt { font-family: var(--font-m); font-size: .7rem; color: var(--text-faint); margin-bottom: .55rem; }
-  .metric .mv {
-    font-family: var(--font-d); font-size: 2.2rem; font-weight: 700;
-    letter-spacing: -.02em; line-height: 1;
-    background: linear-gradient(135deg, var(--mc, var(--text)) 0%, var(--mc2, var(--text-dim)) 100%);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-  }
-  .metric .ms { font-family: var(--font-m); font-size: .72rem; color: var(--ok); margin-top: .4rem; }
-  .metric .ms.warn { color: var(--warn); }
-
-  .analytics-lower { margin-top: 1.2rem; display: grid; grid-template-columns: 1.6fr 1fr; gap: 1.1rem; }
-
-  .bar-chart {
-    border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
-    padding: 1.3rem 1.4rem;
-  }
-  .bar-chart h4 { font-family: var(--font-d); font-weight: 600; font-size: .95rem; color: var(--text); margin-bottom: 1.2rem; }
-  .bar-row { display: flex; align-items: center; gap: .75rem; margin-bottom: .7rem; }
-  .bar-label { font-family: var(--font-m); font-size: .72rem; color: var(--text-faint); width: 90px; text-align: right; flex-shrink: 0; }
-  .bar-track { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
-  .bar-fill { height: 100%; border-radius: 3px; background: var(--bc, var(--accent)); }
-  .bar-val { font-family: var(--font-m); font-size: .72rem; color: var(--text-dim); width: 2.5ch; }
-
-  .pr-table {
-    border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
-    overflow: hidden;
-  }
-  .pr-table h4 {
-    font-family: var(--font-d); font-weight: 600; font-size: .95rem; color: var(--text);
-    padding: 1.1rem 1.2rem; border-bottom: 1px solid var(--border);
-  }
-  .pr-row {
-    display: flex; align-items: center; gap: .6rem;
-    padding: .65rem 1.2rem; border-bottom: 1px solid var(--border-soft);
-  }
-  .pr-row:last-child { border-bottom: none; }
-  .pr-row .repo-n { font-family: var(--font-m); font-size: .74rem; color: var(--azure); flex: 1; }
-  .pr-row .pr-c { font-family: var(--font-d); font-weight: 600; font-size: .88rem; color: var(--text); }
-  .pr-row .pr-s {
-    font-family: var(--font-m); font-size: .66rem; padding: .16rem .5rem;
-    border-radius: 99px; border: 1px solid var(--bc, var(--border)); color: var(--tc, var(--text-faint));
-  }
-
-  /* ─── benefits & guardrails ─────────────────────────────────────────────────── */
-  .ben-grid { margin-top: 2rem; display: grid; grid-template-columns: repeat(2,1fr); gap: 1.1rem; }
-  .ben { border: 1px solid var(--border); border-radius: var(--r); padding: 1.3rem 1.4rem; background: var(--surface); }
-  .ben .bt { font-family: var(--font-m); font-size: .7rem; color: var(--ok); margin-bottom: .45rem; }
-  .ben h4 { font-family: var(--font-d); font-weight: 600; font-size: 1.02rem; color: var(--text); margin-bottom: .35rem; }
-  .ben p { color: var(--text-dim); font-size: .88rem; line-height: 1.5; }
-
-  .guard-grid {
-    margin-top: 2rem; display: grid; grid-template-columns: repeat(2,1fr);
-    gap: 1px; background: var(--border-soft); border: 1px solid var(--border-soft);
-    border-radius: var(--r); overflow: hidden;
-  }
-  .guard { background: var(--surface); padding: 1.3rem 1.4rem; }
-  .guard .gn { font-family: var(--font-m); font-size: .7rem; color: var(--danger); margin-bottom: .4rem; }
-  .guard h4 { font-family: var(--font-d); font-weight: 600; font-size: 1rem; color: var(--text); margin-bottom: .35rem; }
-  .guard p { color: var(--text-dim); font-size: .88rem; line-height: 1.52; }
-
-  /* ─── roadmap / closing ─────────────────────────────────────────────────────── */
-  .roadmap { margin-top: 1.8rem; display: flex; flex-direction: column; gap: .85rem; }
-  .ri { display: flex; gap: 1rem; align-items: baseline; }
-  .rq { font-family: var(--font-m); font-size: .76rem; color: var(--text-faint); width: 5ch; flex-shrink: 0; }
-  .ri p { color: var(--text-dim); font-size: .94rem; }
-  .ri p b { color: var(--text); font-weight: 600; }
-  .closing-cta {
-    margin-top: 2.5rem; padding-top: 1.8rem; border-top: 1px solid var(--border-soft);
-    display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 1.5rem;
-  }
-  .big { font-family: var(--font-d); font-size: clamp(1.5rem,2.8vw,2.2rem); font-weight: 600; }
-  .big .hi { color: var(--accent); }
-
-  /* ─── responsive ─────────────────────────────────────────────────────────────── */
-  @media (max-width: 900px) {
-    .rail { display: none; }
-    .slide { padding: 5rem 1.5rem 3rem; }
-    .prob-grid, .built-strip, .cmd-grid, .repo-twocol, .ben-grid,
-    .guard-grid, .metrics-row, .analytics-lower, .lg-grid { grid-template-columns: 1fr; }
-    .layer-stage { flex-direction: column; }
-    .layer-stack { width: 100%; height: 240px; }
-    .arch-nodes { gap: .5rem; }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
-  }
+:root{--bg:#060A14;--surface:#0C1220;--surface-2:#121A2C;--border:#1E2D46;--border-soft:#162035;--text:#E2EEFF;--text-dim:#7A91B8;--text-faint:#3D5475;--accent:#00D4FF;--violet:#A855F7;--azure:#60A5FA;--warn:#FBBF24;--ok:#34D399;--danger:#F87171;--r:10px;--font-d:'Space Grotesk',sans-serif;--font-b:'Inter',-apple-system,sans-serif;--font-m:'JetBrains Mono',monospace;--font-scale:1;--slide-font-scale:1;--glow-cyan:rgba(0,212,255,0.14);--glow-violet:rgba(168,85,247,0.12)}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--font-b);font-size:calc(1rem * var(--font-scale));-webkit-font-smoothing:antialiased}
+body{background-image:radial-gradient(circle at 1px 1px,rgba(0,212,255,0.06) 1px,transparent 0);background-size:24px 24px;}
+::selection{background:var(--accent);color:#030912}
+/* ── ambient background layers ─────────────────────────────────────────── */
+.bg-layer{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+.bg-layer::before{content:"";position:absolute;width:70vw;height:70vw;top:-24vw;right:-18vw;border-radius:50%;background:radial-gradient(circle,rgba(0,212,255,0.07) 0%,transparent 68%);filter:blur(40px);}
+.bg-layer::after{content:"";position:absolute;width:55vw;height:55vw;bottom:-18vw;left:-14vw;border-radius:50%;background:radial-gradient(circle,rgba(76,168,240,0.055) 0%,transparent 68%);filter:blur(40px);}
+/* ── radar SVG background ──────────────────────────────────────────────── */
+.radar-svg{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;}
+.r-ring  {fill:none;stroke:rgba(0,212,255,0.07);stroke-width:1;}
+.r-ring-d{fill:none;stroke:rgba(0,212,255,0.05);stroke-width:1;stroke-dasharray:4 8;}
+.r-beam  {fill:none;stroke:rgba(0,212,255,0.06);stroke-width:1;}
+.r-node  {fill:rgba(0,212,255,0.18);}
+.r-node-r{fill:none;stroke:rgba(0,212,255,0.11);stroke-width:1;}
+/* ── card hover lift ───────────────────────────────────────────────────── */
+.hov{transition:transform .22s ease,border-color .22s ease,box-shadow .22s ease;cursor:default;}
+.hov:hover{transform:translateY(-3px);border-color:rgba(0,212,255,0.35)!important;box-shadow:0 0 0 1px rgba(0,212,255,0.1),0 12px 40px rgba(0,0,0,.4),0 0 22px rgba(0,212,255,0.07);}
+/* animation kill switch */
+/* animation kill switch */
+.no-anim *,.no-anim *::before,.no-anim *::after{animation:none!important;transition:none!important}
+/* scrollbars */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:#030810}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--accent)}
+*{scrollbar-width:thin;scrollbar-color:var(--border) #030810}
+/* progress */
+.progress{position:fixed;top:0;left:0;width:100%;height:2px;background:var(--border-soft);z-index:90}
+.progress-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--azure),var(--ok));transition:width .1s}
+/* rail */
+.rail{position:fixed;left:clamp(.9rem,2.4vw,2.2rem);top:50%;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;gap:9px;z-index:500}
+.rail::before{content:"";position:absolute;top:-20px;bottom:-20px;left:50%;width:1px;background:var(--border);transform:translateX(-50%);z-index:-1}
+.rdot{width:8px;height:8px;border-radius:50%;background:var(--border);border:1px solid var(--border-soft);cursor:pointer;transition:background .25s,transform .25s,box-shadow .25s;flex-shrink:0}
+.rdot:hover{background:var(--text-faint)}
+.rdot.on{background:var(--accent);border-color:var(--accent);transform:scale(1.35);box-shadow:0 0 0 4px rgba(0,212,255,.18)}
+/* slide nav */
+.slide-nav{position:fixed;bottom:1.4rem;right:1.4rem;display:flex;flex-direction:row;align-items:center;gap:.3rem;z-index:500;background:rgba(6,10,20,.88);border:1px solid rgba(0,212,255,.14);border-radius:99px;padding:.3rem .5rem;opacity:.6;transition:opacity .25s,border-color .25s,box-shadow .25s;white-space:nowrap}
+.slide-nav:hover{opacity:1;border-color:rgba(0,212,255,.38);box-shadow:0 4px 20px rgba(0,212,255,.1)}
+.slide-nav-btn{width:30px;height:30px;border-radius:50%;background:transparent;border:none;color:var(--text-faint);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:color .18s,background .18s;flex-shrink:0}
+.slide-nav-btn:hover:not(:disabled){color:var(--accent);background:rgba(0,212,255,.1)}
+.slide-nav-btn:disabled{opacity:.25;cursor:not-allowed}
+.slide-nav,.pres-toolbar,.rail,.slide-toast,.settings-panel,.help-overlay,.mermaid-overlay{font-size:initial}
+.slide-nav-sep{font-family:var(--font-m);font-size:.68rem;color:var(--text-dim);padding:0 .35rem;user-select:none;white-space:nowrap;letter-spacing:.05em;min-width:6ch;text-align:center;display:inline-block}
+/* toast */
+.slide-toast{position:fixed;top:6px;left:50%;transform:translateX(-50%);font-family:var(--font-m);font-size:.67rem;color:var(--text-faint);background:var(--surface);border:1px solid var(--border);padding:.22rem .65rem;border-radius:4px;z-index:85;opacity:0;transition:opacity .3s;pointer-events:none;white-space:nowrap}
+.slide-toast.show{opacity:1}
+/* deck + slides */
+.deck{height:100vh;overflow:hidden;position:relative;z-index:1}
+.slide{position:absolute;inset:0;height:100vh;width:100%;display:flex;flex-direction:column;justify-content:center;padding:clamp(1.5rem,4vh,3rem) clamp(1.5rem,7vw,7rem);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .35s ease,visibility .35s}
+.slide.active{opacity:1;visibility:visible;pointer-events:auto}
+.inner{max-width:1240px;margin:0 auto;width:100%;padding:clamp(.6rem,1.5vh,1.1rem) clamp(.8rem,1.5vw,1.5rem);min-height:0;overflow-y:auto;max-height:calc(100vh - clamp(3rem,8vh,6rem));scrollbar-width:none;font-size:calc(1em * var(--slide-font-scale));position:relative;z-index:1}
+.inner::-webkit-scrollbar{display:none}
+.snum{display:none}
+/* staggered reveal */
+.inner>*{opacity:0;transform:translateY(14px);transition:opacity .46s cubic-bezier(.16,1,.3,1),transform .46s cubic-bezier(.16,1,.3,1)}
+.slide.active .inner>*:nth-child(1){opacity:1;transform:none;transition-delay:0s}
+.slide.active .inner>*:nth-child(2){opacity:1;transform:none;transition-delay:.08s}
+.slide.active .inner>*:nth-child(3){opacity:1;transform:none;transition-delay:.16s}
+.slide.active .inner>*:nth-child(4){opacity:1;transform:none;transition-delay:.24s}
+.slide.active .inner>*:nth-child(5){opacity:1;transform:none;transition-delay:.32s}
+.slide.active .inner>*:nth-child(n+6){opacity:1;transform:none;transition-delay:.38s}
+#s0.active .inner>*{transition-delay:0s!important}
+#s0.active .inner>*:nth-child(2){transition-delay:.1s!important}
+#s0.active .inner>*:nth-child(3){transition-delay:.22s!important}
+/* text */
+.brow{font-family:var(--font-m);font-size:.78rem;letter-spacing:.04em;color:var(--accent);display:inline-flex;align-items:center;gap:.5em;margin-bottom:1.25rem}
+.brow::before{content:"$";color:var(--text-faint)}
+.brow.az{color:var(--azure)}.brow.warn{color:var(--warn)}.brow.ok{color:var(--ok)}.brow.danger{color:var(--danger)}.brow.vi{color:var(--violet)}
+h1.htitle{font-family:var(--font-d);font-weight:600;font-size:clamp(2rem,4.2vw,3.4rem);line-height:1.08;letter-spacing:-.01em;margin-bottom:1.1rem}
+p.lead{color:var(--text-dim);font-size:1.05rem;line-height:1.65;max-width:68ch}
+.ic{font-family:var(--font-m);font-size:.82em;background:var(--surface-2);border:1px solid var(--border);padding:.1em .45em;border-radius:5px;color:#7DD3FC}
+/* title */
+.title-eyebrow{font-family:var(--font-m);font-size:.78rem;letter-spacing:.06em;color:var(--accent);margin-bottom:1.4rem;opacity:.7}
+.title-eyebrow::before{content:"$ "}
+.agent-icon{width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,#0EA5E9 0%,var(--accent) 40%,var(--violet) 100%);display:flex;align-items:center;justify-content:center;font-size:1.5rem;margin-bottom:1.8rem;box-shadow:0 0 0 1px rgba(0,212,255,.35),0 0 40px rgba(0,212,255,.18),0 4px 20px rgba(0,0,0,.4)}
+.stat-chips{display:flex;flex-wrap:wrap;gap:.65rem;margin-top:2.2rem}
+.stat-chip{font-family:var(--font-m);font-size:.74rem;padding:.32rem .85rem;border-radius:99px;border:1px solid var(--bc,var(--border));background:var(--bk,var(--surface-2));color:var(--tc,var(--text-dim))}
+/* agenda */
+.agenda{margin-top:1.6rem;display:grid;grid-template-columns:1fr 1fr;gap:0 2rem}
+.ai{display:flex;align-items:baseline;gap:1.1rem;padding:.65rem 0;border-bottom:1px solid var(--border-soft)}
+.ai:nth-child(-n+2){border-top:1px solid var(--border-soft)}
+.an{font-family:var(--font-m);color:var(--text-faint);font-size:.76rem;width:2ch;flex-shrink:0}
+.at{font-size:.95rem;color:var(--text);font-weight:500}
+.atag{margin-left:auto;font-family:var(--font-m);font-size:.68rem;color:var(--accent);opacity:.75;white-space:nowrap}
+.atag.az{color:var(--azure)}.atag.ok{color:var(--ok)}.atag.warn{color:var(--warn)}.atag.danger{color:var(--danger)}
+/* mermaid */
+.mermaid-wrap{position:relative;margin-top:1.2rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1.4rem 1.1rem 1.2rem;display:flex;justify-content:center;align-items:center;overflow:hidden;height:clamp(200px,40vh,360px);transition:border-color .22s,box-shadow .22s}
+.mermaid-wrap:hover{border-color:rgba(0,212,255,.22);box-shadow:0 4px 24px rgba(0,0,0,.3)}
+.mermaid-wrap svg{max-width:100%!important;max-height:100%!important;width:auto!important;height:auto!important;display:block;margin:0 auto}
+.mermaid-wrap .mermaid{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
+.mermaid-expand-btn{position:absolute;top:.6rem;right:.65rem;width:38px;height:38px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;cursor:pointer;z-index:5;display:flex;align-items:center;justify-content:center;color:var(--text-faint);font-size:1rem;transition:color .2s,border-color .2s,background .2s}
+.mermaid-expand-btn:hover{color:var(--text);border-color:var(--accent);background:var(--surface)}
+.mermaid-overlay{position:fixed;inset:0;z-index:300;background:rgba(12,14,18,.96);display:flex;align-items:center;justify-content:center;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .25s,visibility .25s}
+.mermaid-overlay.open{opacity:1;visibility:visible;pointer-events:all}
+.mermaid-overlay-box{position:relative;width:min(96vw,1400px);height:min(97vh,980px);background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 40px 80px -20px rgba(0,0,0,.7)}
+.mermaid-overlay-toolbar{display:flex;align-items:center;justify-content:space-between;padding:.55rem .75rem;border-bottom:1px solid var(--border-soft);background:var(--surface-2);flex-shrink:0;border-radius:14px 14px 0 0}
+.mermaid-zoom-btns{display:flex;gap:.3rem;align-items:center}
+.mermaid-zoom-btn{height:30px;padding:0 .65rem;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--text-dim);font-size:1rem;display:flex;align-items:center;justify-content:center;transition:color .15s,border-color .15s;font-family:var(--font-m);user-select:none}
+.mermaid-zoom-btn:hover{color:var(--text);border-color:var(--accent);background:var(--surface-2)}
+.mermaid-overlay-close{width:30px;height:30px;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--text-faint);font-size:.9rem;display:flex;align-items:center;justify-content:center;transition:color .15s,border-color .15s}
+.mermaid-overlay-close:hover{color:var(--text);border-color:var(--danger)}
+.mermaid-viewport{flex:1;overflow:hidden;position:relative;cursor:grab}
+.mermaid-viewport.panning{cursor:grabbing}
+#mermaidOverlayContent{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
+#mermaidOverlayContent svg{display:block;max-width:none;height:auto}
+/* terminal */
+.terminal{background:#04080E;border:1px solid var(--border);border-top:1px solid rgba(0,212,255,.18);border-radius:var(--r);overflow:hidden;box-shadow:0 20px 50px -20px rgba(0,0,0,.5),0 0 0 1px rgba(0,212,255,.06),inset 0 1px 0 rgba(0,212,255,.06);margin-top:1.4rem}
+.terminal-head{display:flex;align-items:center;gap:.4rem;padding:.7rem 1rem;background:var(--surface-2);border-bottom:1px solid var(--border)}
+.terminal-head span{width:10px;height:10px;border-radius:50%}
+.terminal-head span:nth-child(1){background:#ff6b6b;opacity:.7}
+.terminal-head span:nth-child(2){background:#ffb454;opacity:.7}
+.terminal-head span:nth-child(3){background:#37d6a0;opacity:.7}
+.terminal-head label{margin-left:.6rem;font-family:var(--font-m);font-size:.72rem;color:var(--text-faint)}
+.terminal-body{padding:1.2rem 1.4rem 1.4rem;font-family:var(--font-m);font-size:clamp(.72rem,1vw,.82rem);line-height:1.85;overflow-x:auto}
+.tl{display:flex;align-items:baseline;gap:.6rem}
+.tn{color:var(--text-faint);font-size:.68rem;flex-shrink:0;width:2ch}
+.tbadge{font-size:.66rem;padding:.1rem .4rem;border-radius:3px;flex-shrink:0;font-weight:600;letter-spacing:.03em}
+.tbadge.pass{background:rgba(78,205,196,.1);color:var(--ok)}.tbadge.sec{background:rgba(255,179,71,.1);color:var(--warn)}.tbadge.def{background:rgba(0,212,255,.08);color:var(--accent)}.tbadge.io{background:rgba(76,168,240,.1);color:var(--azure)}
+.ttext{color:var(--text-dim)}
+.ttext .ky{color:#7DD3FC}.ttext .vl{color:#8be8a4}.ttext .cl{color:var(--azure)}.ttext .cm{color:var(--text-faint);font-style:italic}
+/* gate cards */
+.gate-grid{margin-top:1.6rem;display:grid;grid-template-columns:repeat(4,1fr);gap:.9rem}
+.gate-card{border:1px solid var(--border);border-top:2px solid var(--c,var(--border));border-radius:var(--r);background:var(--surface);padding:1.1rem 1.1rem 1.2rem}
+.gate-num{font-family:var(--font-m);font-size:.68rem;color:var(--c,var(--text-faint));text-transform:uppercase;letter-spacing:.05em;margin-bottom:.4rem}
+.gate-card h4{font-family:var(--font-d);font-size:.92rem;font-weight:600;color:var(--text);margin-bottom:.3rem}
+.gate-card p{color:var(--text-dim);font-size:.83rem;line-height:1.5}
+/* mode table */
+.mode-table{margin-top:1.4rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+.mode-table-head{display:grid;grid-template-columns:1.6fr 1.2fr 1fr 1.8fr;background:var(--surface-2);border-bottom:1px solid var(--border)}
+.mode-table-head>div{font-family:var(--font-m);font-size:.68rem;color:var(--text-faint);letter-spacing:.04em;text-transform:uppercase;padding:.6rem 1rem}
+.mode-row{display:grid;grid-template-columns:1.6fr 1.2fr 1fr 1.8fr;border-bottom:1px solid var(--border-soft)}
+.mode-row:last-child{border-bottom:none}
+.mode-row>div{padding:.6rem 1rem;font-size:.83rem}
+.mode-row .cmd{font-family:var(--font-m);color:var(--accent)}
+.mode-row .mode{font-family:var(--font-m);font-size:.74rem;color:var(--text-faint)}
+.mode-row .model{font-family:var(--font-m);font-size:.74rem}
+.mode-row .note{color:var(--text-dim);font-size:.82rem}
+/* layer plates */
+.layer-stage{margin-top:1.8rem;display:flex;gap:2.5rem;align-items:flex-start}
+.layer-stack{flex-shrink:0;position:relative;width:300px;height:260px;perspective:900px}
+.layer-plate{position:absolute;left:0;right:0;border-radius:10px;border:1px solid var(--bc,var(--border));background:var(--bk,var(--surface));padding:.95rem 1.2rem}
+.layer-plate.l0{--bc:rgba(255,107,107,.35);--bk:rgba(20,14,18,.96);top:0;width:100%}
+.layer-plate.l1{--bc:rgba(0,212,255,.38);--bk:rgba(8,14,24,.97);top:76px;width:96%;left:2%}
+.layer-plate.l2{--bc:rgba(76,168,240,.4);--bk:rgba(12,16,22,.96);top:152px;width:92%;left:4%}
+.lp-num{font-family:var(--font-m);font-size:.66rem;color:var(--lc,var(--text-faint));text-transform:uppercase;letter-spacing:.05em;margin-bottom:.25rem}
+.lp-title{font-family:var(--font-d);font-size:.92rem;font-weight:600;color:var(--text);margin-bottom:.15rem}
+.lp-sub{font-family:var(--font-m);font-size:.68rem;color:var(--text-faint)}
+.l0 .lp-num{--lc:var(--danger)}.l1 .lp-num{--lc:var(--accent)}.l2 .lp-num{--lc:var(--azure)}
+.layer-desc{flex:1;display:flex;flex-direction:column;gap:.85rem}
+.ld{padding:1rem 1.1rem;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);border-left:3px solid var(--ldc,var(--border))}
+.ld h4{font-family:var(--font-d);font-weight:600;font-size:.92rem;color:var(--text);margin-bottom:.25rem}
+.ld p{color:var(--text-dim);font-size:.84rem;line-height:1.52}
+.ld .file-list{margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.35rem}
+.ld .fl{font-family:var(--font-m);font-size:.7rem;padding:.15rem .5rem;border-radius:4px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-faint)}
+/* two col + panel */
+.twocol{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;margin-top:1.5rem}
+.panel{border:1px solid var(--border);border-radius:var(--r);background:var(--surface);overflow:hidden}
+.panel-head{padding:.65rem 1.1rem;background:var(--surface-2);border-bottom:1px solid var(--border);font-family:var(--font-m);font-size:.7rem;color:var(--text-faint);display:flex;align-items:center;gap:.5rem}
+.panel-head .dot{width:7px;height:7px;border-radius:50%;background:var(--dc,var(--text-faint));flex-shrink:0}
+.panel-body{padding:1rem 1.1rem}
+.panel-body p{color:var(--text-dim);font-size:.86rem;line-height:1.55;margin-bottom:.5rem}
+.panel-body p:last-child{margin-bottom:0}
+.ext-chips{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.6rem}
+.ext-chip{font-family:var(--font-m);font-size:.72rem;padding:.2rem .55rem;border-radius:4px;background:var(--bk2,var(--surface-2));border:1px solid var(--bc2,var(--border));color:var(--tc2,var(--text-faint))}
+/* config table */
+.config-table{margin-top:1.5rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+.config-head{display:grid;grid-template-columns:2fr 2.2fr .8fr;background:var(--surface-2);border-bottom:1px solid var(--border)}
+.config-head>div{font-family:var(--font-m);font-size:.67rem;color:var(--text-faint);letter-spacing:.04em;text-transform:uppercase;padding:.55rem 1rem}
+.config-row{display:grid;grid-template-columns:2fr 2.2fr .8fr;border-bottom:1px solid var(--border-soft)}
+.config-row:last-child{border-bottom:none}
+.config-row>div{padding:.55rem 1rem;font-size:.82rem}
+.config-row .ckey{font-family:var(--font-m);color:var(--azure);font-size:.76rem}
+.config-row .cval{color:var(--text-dim)}
+.config-row .ctag{font-family:var(--font-m);font-size:.66rem;padding:.14rem .45rem;border-radius:4px}
+.ctag.req{background:rgba(255,107,107,.1);color:var(--danger)}.ctag.opt{background:rgba(78,205,196,.1);color:var(--ok)}.ctag.sec2{background:rgba(255,179,71,.1);color:var(--warn)}
+/* kql */
+.kql-block{background:#04080E;border:1px solid var(--border);border-top:1px solid rgba(0,212,255,.15);border-radius:var(--r);overflow:hidden;margin-top:1.2rem;box-shadow:0 0 0 1px rgba(0,212,255,.04),inset 0 1px 0 rgba(0,212,255,.05)}
+.kql-head{padding:.5rem .9rem;background:var(--surface-2);border-bottom:1px solid var(--border);font-family:var(--font-m);font-size:.68rem;color:var(--text-faint)}
+.kql-body{padding:1rem 1.2rem;font-family:var(--font-m);font-size:.78rem;line-height:1.8;color:var(--text-dim);overflow-x:auto;white-space:pre}
+.kql-body .kw{color:#7DD3FC}.kql-body .fn2{color:var(--azure)}.kql-body .str{color:#8be8a4}.kql-body .cmt{color:var(--text-faint);font-style:italic}
+/* cost */
+.cost-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;margin-top:1.5rem}
+.cost-panel{border:1px solid var(--border);border-radius:var(--r);background:var(--surface);padding:1.2rem 1.3rem}
+.cost-panel h4{font-family:var(--font-d);font-weight:600;font-size:.9rem;color:var(--text);margin-bottom:1rem}
+.bar-row{display:flex;align-items:center;gap:.7rem;margin-bottom:.65rem}
+.bar-label{font-family:var(--font-m);font-size:.7rem;color:var(--text-faint);width:88px;text-align:right;flex-shrink:0}
+.bar-track{flex:1;height:5px;background:var(--border);border-radius:3px;overflow:hidden}
+.bar-fill{height:100%;border-radius:3px;background:var(--bc3,var(--bc,var(--accent)))}
+.bar-val{font-family:var(--font-m);font-size:.7rem;color:var(--text-dim);width:2.8ch}
+.scenario-table{width:100%;border-collapse:collapse;font-size:.83rem;margin-top:.75rem}
+.scenario-table th{font-family:var(--font-m);font-size:.68rem;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em;padding:.5rem .8rem;border-bottom:1px solid var(--border);text-align:left}
+.scenario-table td{padding:.5rem .8rem;border-bottom:1px solid var(--border-soft);color:var(--text-dim)}
+.scenario-table tr:last-child td{border-bottom:none}
+.scenario-table .sc{color:var(--text);font-weight:500}
+.scenario-table .hi2{color:var(--ok);font-family:var(--font-m);font-weight:600}
+/* events */
+.event-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:.85rem;margin-top:1.4rem}
+.event-card{border:1px solid var(--border);border-left:3px solid var(--ec,var(--border));border-radius:var(--r);background:var(--surface);padding:.95rem 1rem}
+.event-name{font-family:var(--font-m);font-size:.78rem;color:var(--ec,var(--text-faint));margin-bottom:.3rem;font-weight:600}
+.event-card p{color:var(--text-dim);font-size:.82rem;line-height:1.5}
+.event-card .dims{margin-top:.45rem;display:flex;flex-wrap:wrap;gap:.3rem}
+.event-card .dim{font-family:var(--font-m);font-size:.66rem;padding:.12rem .4rem;border-radius:3px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-faint)}
+/* roadmap */
+.roadmap-list{margin-top:1.6rem;display:flex;flex-direction:column;gap:.75rem}
+.rl{display:flex;gap:1rem;align-items:flex-start;padding:.9rem 1.1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r)}
+.rl-tag{font-family:var(--font-m);font-size:.68rem;color:var(--azure);width:10ch;flex-shrink:0}
+.rl p{color:var(--text-dim);font-size:.88rem;line-height:1.5}
+.rl p b{color:var(--text);font-weight:600}
+.closing-cta{margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border-soft)}
+.big{font-family:var(--font-d);font-size:clamp(1.4rem,2.5vw,2rem);font-weight:600}
+.big .hi{color:var(--accent)}
+/* presenter toolbar */
+.pres-toolbar{position:fixed;top:.6rem;right:.7rem;display:flex;gap:.3rem;z-index:500;opacity:.8;transition:opacity .25s}
+.pres-toolbar:hover{opacity:1}
+.pres-btn{width:36px;height:36px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text-faint);cursor:pointer;font-size:.9rem;display:flex;align-items:center;justify-content:center;transition:color .2s,border-color .2s;opacity:.65}
+.pres-btn:hover{color:var(--text);border-color:var(--accent)}
+/* settings panel */
+.settings-panel{position:fixed;top:3.1rem;right:.7rem;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:1.2rem 1.3rem;width:300px;z-index:200;box-shadow:0 20px 60px -10px rgba(0,0,0,.6);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-8px) scale(.97);transition:opacity .25s ease,transform .25s ease,visibility .25s}
+.settings-panel.open{opacity:1;visibility:visible;pointer-events:all;transform:none}
+.settings-head{display:flex;justify-content:space-between;align-items:center;font-family:var(--font-d);font-size:.95rem;font-weight:600;color:var(--text);margin-bottom:1rem}
+.settings-section{margin-bottom:.9rem}
+.settings-section:last-child{margin-bottom:0}
+.settings-section-title{font-family:var(--font-m);font-size:.68rem;font-weight:500;color:var(--text-faint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:.6rem}
+.settings-item{display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;font-size:.85rem;color:var(--text-dim);gap:.75rem;user-select:none}
+.settings-item+.settings-item{border-top:1px solid var(--border-soft)}
+.settings-item:hover{color:var(--text)}
+.toggle-switch{width:36px;height:20px;border-radius:10px;flex-shrink:0;background:var(--border);border:none;cursor:pointer;position:relative;transition:background .25s ease}
+.toggle-switch.on{background:var(--accent)}
+.toggle-switch::after{content:"";position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:3px;left:3px;transition:transform .25s ease}
+.toggle-switch.on::after{transform:translateX(16px)}
+.font-size-control{display:flex;align-items:center;gap:.5rem}
+.font-size-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--text-dim);font-size:.9rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s,color .2s,border-color .2s}
+.font-size-btn:hover{background:var(--border);color:var(--text);border-color:var(--text-faint)}
+.font-size-btn:active{transform:scale(.95)}
+.font-size-value{font-family:var(--font-m);font-size:.8rem;color:var(--text);min-width:40px;text-align:center;font-weight:500}
+.settings-note{margin-top:.9rem;padding-top:.75rem;border-top:1px solid var(--border-soft);font-family:var(--font-m);font-size:.68rem;color:var(--text-faint);line-height:1.5}
+.help-close{background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-faint);cursor:pointer;font-size:.9rem;width:28px;height:28px;display:flex;align-items:center;justify-content:center;transition:color .2s,border-color .2s}
+.help-close:hover{color:var(--text);border-color:var(--text-faint)}
+/* help overlay */
+.help-overlay{position:fixed;inset:0;z-index:400;background:rgba(12,14,18,.92);display:flex;align-items:center;justify-content:center;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .22s,visibility .22s}
+.help-overlay.open{opacity:1;visibility:visible;pointer-events:all}
+.help-box{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:2rem 2.4rem;width:min(540px,92vw);box-shadow:0 30px 60px -15px rgba(0,0,0,.65)}
+.help-head{display:flex;justify-content:space-between;align-items:center;font-family:var(--font-d);font-size:1.05rem;font-weight:600;color:var(--text);margin-bottom:1.5rem}
+.help-grid{display:grid;grid-template-columns:auto 1fr;gap:.55rem 1.4rem;font-family:var(--font-m);font-size:.8rem}
+.hk{color:var(--accent);background:rgba(0,212,255,.08);border:1px solid rgba(0,212,255,.18);padding:.16rem .5rem;border-radius:4px;white-space:nowrap;display:inline-flex;align-items:center}
+.hd{color:var(--text-dim);align-self:center}
+.help-footer{margin-top:1.4rem;padding-top:1rem;border-top:1px solid var(--border-soft);font-family:var(--font-m);font-size:.72rem;color:var(--text-faint)}
+/* card hover */
+.gate-card{transition:border-top-color .25s,box-shadow .25s,transform .22s,border-color .22s}
+.gate-card:hover{box-shadow:0 0 0 1px rgba(0,212,255,0.1),0 12px 36px rgba(0,0,0,.5),0 0 20px rgba(0,212,255,0.07);transform:translateY(-3px);border-color:rgba(0,212,255,0.3)!important}
+.event-card{transition:background .2s,transform .22s,box-shadow .22s,border-color .22s}
+.event-card:hover{background:var(--surface-2);transform:translateY(-2px);box-shadow:0 8px 28px rgba(0,0,0,.35);border-color:rgba(0,212,255,.22)!important}
+.rl{transition:background .2s,border-color .22s,transform .22s,box-shadow .22s}
+.rl:hover{background:var(--surface-2);border-color:var(--azure);transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.3)}
+.cost-panel{transition:transform .22s,box-shadow .22s,border-color .22s}
+.cost-panel:hover{transform:translateY(-3px);border-color:rgba(0,212,255,.3)!important;box-shadow:0 0 0 1px rgba(0,212,255,.08),0 12px 36px rgba(0,0,0,.4)}
+.panel{transition:border-color .22s,box-shadow .22s}
+.panel:hover{border-color:rgba(0,212,255,.22);box-shadow:0 4px 20px rgba(0,0,0,.25)}
+/* ── cmd-card layout (template slide 5) ─────────────────────────────── */
+.cmd-grid{margin-top:1.6rem;display:grid;grid-template-columns:repeat(2,1fr);gap:1.1rem}
+.cmd-card{border:1px solid var(--border);border-top:2px solid var(--c,var(--border));border-radius:var(--r);overflow:hidden;background:var(--surface);transition:border-top-color .22s,border-color .22s,box-shadow .22s,transform .22s}
+.cmd-card:hover{transform:translateY(-3px);border-color:rgba(0,212,255,.3)!important;box-shadow:0 0 0 1px rgba(0,212,255,.08),0 12px 36px rgba(0,0,0,.4)}
+.cmd-card:hover .cmd-head{background:rgba(0,212,255,.03)}
+.cmd-head{padding:.85rem 1.1rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.7rem;background:var(--surface-2);transition:background .22s}
+.cmd-token{font-family:var(--font-m);font-size:.86rem;font-weight:600;color:var(--c,var(--accent));letter-spacing:.01em}
+.cmd-badge{margin-left:auto;font-family:var(--font-m);font-size:.65rem;padding:.16rem .52rem;border-radius:99px;background:rgba(var(--cr,0,212,255),.08);border:1px solid rgba(var(--cr,0,212,255),.25);color:var(--c,var(--accent));white-space:nowrap;flex-shrink:0}
+.cmd-body{padding:1rem 1.1rem}
+.cmd-body p{color:var(--text-dim);font-size:.87rem;line-height:1.55}
+.ex{margin-top:.85rem;background:#04080E;border:1px solid var(--border);border-top:1px solid rgba(0,212,255,.1);border-radius:7px;padding:.65rem .9rem;font-family:var(--font-m);font-size:.74rem;color:var(--text-faint);line-height:1.75}
+.ex .ek{color:var(--azure)}.ex .ev{color:var(--ok)}.ex .ea{color:var(--text-faint)}.ex .em{color:var(--danger)}
+/* ── trigger flow (template slide 6) ────────────────────────────────── */
+.tflow{display:flex;flex-direction:column}
+.tflow-row{display:flex;align-items:flex-start;gap:1rem;position:relative;padding-bottom:1.1rem}
+.tflow-row:not(:last-child)::before{content:"";position:absolute;left:18px;top:40px;bottom:0;width:1px;background:var(--border)}
+.tflow-icon{width:36px;height:36px;border-radius:50%;flex-shrink:0;border:1px solid var(--c,var(--border));background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:.8rem;z-index:1}
+.tflow-body h4{font-family:var(--font-d);font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:.18rem}
+.tflow-body p{color:var(--text-dim);font-size:.81rem;line-height:1.5}
+.chip{display:inline-block;margin-top:.3rem;font-family:var(--font-m);font-size:.69rem;background:var(--surface-2);border:1px solid var(--border);color:var(--text-faint);padding:.12rem .45rem;border-radius:4px}
+/* side-by-side mermaid + flow */
+.mmd-flow{display:grid;grid-template-columns:1.15fr 1fr;gap:1.5rem;margin-top:1rem;align-items:start}
+/* ── analytics metrics (slide 12 from template) ──────────────────────── */
+.metrics-row{margin-top:1.8rem;display:grid;grid-template-columns:repeat(4,1fr);gap:1.1rem}
+.metric{border:1px solid var(--border);border-radius:var(--r);background:var(--surface);padding:1.3rem 1.2rem;transition:border-color .22s,box-shadow .22s,transform .22s}
+.metric:hover{transform:translateY(-3px);border-color:rgba(0,212,255,.3)!important;box-shadow:0 0 0 1px rgba(0,212,255,.08),0 12px 36px rgba(0,0,0,.4)}
+.metric .mt{font-family:var(--font-m);font-size:.68rem;color:var(--text-faint);margin-bottom:.55rem;letter-spacing:.03em}
+.metric .mv{font-family:var(--font-d);font-size:2.3rem;font-weight:700;letter-spacing:-.02em;line-height:1;background:linear-gradient(135deg,var(--mc,var(--text)) 0%,var(--mc2,var(--text-dim)) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.metric .ms{font-family:var(--font-m);font-size:.7rem;color:var(--ok);margin-top:.45rem}
+.metric .ms.warn{color:var(--warn)}
+.analytics-lower{margin-top:1.2rem;display:grid;grid-template-columns:1.6fr 1fr;gap:1.1rem}
+.bar-chart{border:1px solid var(--border);border-radius:var(--r);background:var(--surface);padding:1.3rem 1.4rem}
+.bar-chart h4{font-family:var(--font-d);font-weight:600;font-size:.93rem;color:var(--text);margin-bottom:1.1rem}
+.pr-table{border:1px solid var(--border);border-radius:var(--r);background:var(--surface);overflow:hidden}
+.pr-table h4{font-family:var(--font-d);font-weight:600;font-size:.93rem;color:var(--text);padding:1.1rem 1.2rem;border-bottom:1px solid var(--border)}
+.pr-row{display:flex;align-items:center;gap:.6rem;padding:.65rem 1.2rem;border-bottom:1px solid var(--border-soft);transition:background .15s}
+.pr-row:hover{background:rgba(0,212,255,.025)}
+.pr-row:last-child{border-bottom:none}
+.pr-row .repo-n{font-family:var(--font-m);font-size:.73rem;color:var(--azure);flex:1}
+.pr-row .pr-c{font-family:var(--font-d);font-weight:600;font-size:.88rem;color:var(--text)}
+.pr-row .pr-s{font-family:var(--font-m);font-size:.65rem;padding:.15rem .5rem;border-radius:99px;border:1px solid var(--bc,var(--border));color:var(--tc,var(--text-faint))}
+/* ── roadmap cards (slide 14 from template) ─────────────────────────── */
+.roadmap-grid{margin-top:2rem;display:grid;grid-template-columns:repeat(3,1fr);gap:1.1rem}
+.rcard{border:1px solid var(--border);border-radius:var(--r);background:var(--surface);padding:1.4rem 1.4rem 1.3rem;display:flex;flex-direction:column;gap:.65rem;position:relative;overflow:hidden;transition:transform .22s,border-color .22s,box-shadow .22s}
+.rcard::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--rc,var(--accent)),transparent);opacity:.7}
+.rcard:hover{transform:translateY(-3px);border-color:rgba(0,212,255,.3)!important;box-shadow:0 0 0 1px rgba(0,212,255,.08),0 12px 36px rgba(0,0,0,.4)}
+.rcard:hover::before{opacity:1}
+.rcard-top{display:flex;align-items:flex-start;justify-content:space-between;gap:.6rem}
+.rcard-num{font-family:var(--font-m);font-size:.7rem;font-weight:600;color:var(--rc,var(--accent));background:rgba(0,212,255,.07);border:1px solid rgba(0,212,255,.18);width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.rcard-status{font-family:var(--font-m);font-size:.65rem;padding:.22rem .65rem;border-radius:99px;border:1px solid var(--sc,var(--border));color:var(--stc,var(--text-faint));white-space:nowrap}
+.rcard h4{font-family:var(--font-d);font-weight:600;font-size:.98rem;color:var(--text)}
+.rcard p{color:var(--text-dim);font-size:.86rem;line-height:1.52;flex:1}
+.rcard-tags{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.3rem;padding-top:.75rem;border-top:1px solid var(--border-soft)}
+.rcard-tag{font-family:var(--font-m);font-size:.65rem;padding:.15rem .5rem;border-radius:4px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-faint)}
+.rcard.span2{grid-column:span 2}
+.status-inprog{--sc:rgba(52,211,153,.3);--stc:var(--ok)}
+.status-next  {--sc:rgba(0,212,255,.25);--stc:var(--accent)}
+.status-plan  {--sc:rgba(168,85,247,.25);--stc:var(--violet)}
+/* closing CTA */
+.closing-cta{margin-top:2rem;padding-top:1.6rem;border-top:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1.5rem}
+.big{font-family:var(--font-d);font-size:clamp(1.3rem,2.2vw,1.8rem);font-weight:600;line-height:1.2}
+.big .hi{color:var(--accent);text-shadow:0 0 24px rgba(0,212,255,.3)}
+.cta-badge{display:flex;gap:.5rem;align-items:center;font-family:var(--font-m);font-size:.74rem;color:var(--text-faint)}
+.cta-dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+/* responsive */
+@media(max-width:960px){.rail,.slide-nav,.pres-toolbar{display:none}.slide{padding:3rem 1.5rem 2rem}.twocol,.gate-grid,.cost-grid,.event-grid,.agenda,.metrics-row,.analytics-lower,.roadmap-grid,.cmd-grid,.mmd-flow{grid-template-columns:1fr}.rcard.span2{grid-column:span 1}.layer-stage{flex-direction:column}.layer-stack{width:100%;height:220px}.mode-table-head,.mode-row{grid-template-columns:1.4fr 1.2fr .8fr}.mode-table-head>div:last-child,.mode-row>div:last-child{display:none}.config-head,.config-row{grid-template-columns:1.8fr 1.8fr}.config-head>div:last-child,.config-row>div:last-child{display:none}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 </style>
 </head>
 <body>
-
-<!-- ── PCB background ─────────────────────────────────────────────────────── -->
-<div class="bg-pcb" aria-hidden="true">
-  <svg class="pcb-svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
-    <!--  top-left corner — horizontal/vertical traces with pads  -->
-    <g opacity="1">
-      <!-- main horizontal run -->
-      <polyline class="pcb-trace" points="0,80 120,80 120,140 220,140"/>
-      <polyline class="pcb-trace" points="0,140 60,140 60,200 160,200 160,260"/>
-      <polyline class="pcb-trace" points="80,0 80,60 180,60 180,30 280,30"/>
-      <polyline class="pcb-trace" points="200,0 200,120 320,120 320,80 440,80"/>
-      <polyline class="pcb-trace" points="0,260 100,260 100,320"/>
-      <line class="pcb-trace" x1="120" y1="80" x2="120" y2="0"/>
-      <line class="pcb-trace" x1="220" y1="140" x2="360" y2="140"/>
-      <polyline class="pcb-trace" points="360,140 360,100 460,100 460,60 560,60"/>
-      <!-- pads -->
-      <circle class="pcb-pad" cx="120" cy="80"  r="4"/>
-      <circle class="pcb-pad" cx="60"  cy="140" r="4"/>
-      <circle class="pcb-pad" cx="160" cy="200" r="4"/>
-      <circle class="pcb-pad" cx="80"  cy="60"  r="4"/>
-      <circle class="pcb-pad" cx="180" cy="60"  r="4"/>
-      <circle class="pcb-pad" cx="200" cy="120" r="4"/>
-      <circle class="pcb-pad" cx="320" cy="120" r="4"/>
-      <circle class="pcb-pad" cx="220" cy="140" r="4"/>
-      <circle class="pcb-pad" cx="360" cy="140" r="4"/>
-      <circle class="pcb-pad" cx="460" cy="100" r="4"/>
-      <!-- vias -->
-      <circle class="pcb-via" cx="120" cy="80"  r="8"/>
-      <circle class="pcb-via" cx="360" cy="140" r="8"/>
-      <circle class="pcb-via" cx="200" cy="120" r="8"/>
-    </g>
-
-    <!-- top-right corner -->
-    <g opacity="1">
-      <polyline class="pcb-trace" points="1600,60 1480,60 1480,120 1380,120 1380,80 1260,80"/>
-      <polyline class="pcb-trace" points="1600,140 1520,140 1520,180 1400,180 1400,240"/>
-      <polyline class="pcb-trace" points="1480,60 1480,0"/>
-      <polyline class="pcb-trace" points="1380,120 1380,200 1280,200 1280,160"/>
-      <line class="pcb-trace" x1="1260" y1="80" x2="1140" y2="80"/>
-      <polyline class="pcb-trace" points="1400,240 1300,240 1300,200"/>
-      <!-- pads -->
-      <circle class="pcb-pad" cx="1480" cy="60"  r="4"/>
-      <circle class="pcb-pad" cx="1380" cy="120" r="4"/>
-      <circle class="pcb-pad" cx="1520" cy="140" r="4"/>
-      <circle class="pcb-pad" cx="1400" cy="180" r="4"/>
-      <circle class="pcb-pad" cx="1280" cy="200" r="4"/>
-      <circle class="pcb-pad" cx="1380" cy="200" r="4"/>
-      <!-- vias -->
-      <circle class="pcb-via" cx="1480" cy="60"  r="8"/>
-      <circle class="pcb-via" cx="1380" cy="120" r="8"/>
-    </g>
-
-    <!-- bottom-left corner -->
-    <g opacity="1">
-      <polyline class="pcb-trace" points="0,780 80,780 80,740 200,740 200,800 320,800"/>
-      <polyline class="pcb-trace" points="0,840 120,840 120,780"/>
-      <polyline class="pcb-trace" points="200,740 200,680 320,680 320,720 440,720"/>
-      <polyline class="pcb-trace" points="320,800 320,900"/>
-      <line class="pcb-trace" x1="80" y1="780" x2="80" y2="900"/>
-      <polyline class="pcb-trace" points="440,720 440,760 560,760"/>
-      <!-- pads -->
-      <circle class="pcb-pad" cx="80"  cy="780" r="4"/>
-      <circle class="pcb-pad" cx="200" cy="740" r="4"/>
-      <circle class="pcb-pad" cx="120" cy="840" r="4"/>
-      <circle class="pcb-pad" cx="200" cy="800" r="4"/>
-      <circle class="pcb-pad" cx="320" cy="800" r="4"/>
-      <circle class="pcb-pad" cx="320" cy="680" r="4"/>
-      <circle class="pcb-pad" cx="440" cy="720" r="4"/>
-      <!-- vias -->
-      <circle class="pcb-via" cx="200" cy="740" r="8"/>
-      <circle class="pcb-via" cx="320" cy="800" r="8"/>
-    </g>
-
-    <!-- bottom-right corner -->
-    <g opacity="1">
-      <polyline class="pcb-trace" points="1600,820 1480,820 1480,760 1360,760 1360,800 1240,800"/>
-      <polyline class="pcb-trace" points="1600,740 1540,740 1540,700 1420,700 1420,740"/>
-      <polyline class="pcb-trace" points="1360,760 1360,680 1240,680 1240,720"/>
-      <polyline class="pcb-trace" points="1240,800 1240,900"/>
-      <line class="pcb-trace" x1="1480" y1="820" x2="1480" y2="900"/>
-      <polyline class="pcb-trace" points="1240,680 1120,680 1120,720"/>
-      <!-- pads -->
-      <circle class="pcb-pad" cx="1480" cy="820" r="4"/>
-      <circle class="pcb-pad" cx="1360" cy="760" r="4"/>
-      <circle class="pcb-pad" cx="1540" cy="740" r="4"/>
-      <circle class="pcb-pad" cx="1420" cy="700" r="4"/>
-      <circle class="pcb-pad" cx="1240" cy="800" r="4"/>
-      <circle class="pcb-pad" cx="1360" cy="680" r="4"/>
-      <circle class="pcb-pad" cx="1240" cy="680" r="4"/>
-      <!-- vias -->
-      <circle class="pcb-via" cx="1360" cy="760" r="8"/>
-      <circle class="pcb-via" cx="1240" cy="800" r="8"/>
-    </g>
-
-    <!-- slim mid-screen horizontal trace — just enough to break the empty center without crowding it -->
-    <g opacity="0.45">
-      <polyline class="pcb-trace" points="0,448 56,448 56,464 120,464"/>
-      <polyline class="pcb-trace" points="1600,452 1544,452 1544,464 1480,464"/>
-      <circle class="pcb-pad" cx="56"   cy="448" r="3"/>
-      <circle class="pcb-pad" cx="1544" cy="452" r="3"/>
-    </g>
-  </svg>
-</div>
-
-<!-- ── UI chrome ─────────────────────────────────────────────────────────── -->
+<!-- ── BACKGROUND ──────────────────────────────────────────────────────── -->
+<div class="bg-layer" aria-hidden="true"></div>
+<svg class="radar-svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+  <circle class="r-ring"   cx="1680" cy="-60"  r="260"/>
+  <circle class="r-ring-d" cx="1680" cy="-60"  r="390"/>
+  <circle class="r-ring"   cx="1680" cy="-60"  r="520"/>
+  <circle class="r-ring-d" cx="1680" cy="-60"  r="650"/>
+  <circle class="r-ring"   cx="-100" cy="960"  r="220"/>
+  <circle class="r-ring-d" cx="-100" cy="960"  r="360"/>
+  <circle class="r-ring"   cx="-100" cy="960"  r="500"/>
+  <path class="r-beam" d="M 200,160 C 300,195 400,250 490,270"/>
+  <path class="r-beam" d="M 490,270 C 630,295 740,225 830,185"/>
+  <path class="r-beam" d="M 830,185 C 985,155 1105,245 1190,330"/>
+  <path class="r-beam" d="M 490,270 C 445,410 365,565 330,685"/>
+  <path class="r-beam" d="M 830,185 C 810,325 790,425 770,545"/>
+  <path class="r-beam" d="M 770,545 C 910,575 1030,625 1110,685"/>
+  <path class="r-beam" d="M 1190,330 C 1310,265 1410,225 1465,205"/>
+  <path class="r-beam" d="M 1110,685 C 1210,505 1330,365 1465,205"/>
+  <circle class="r-node"   cx="200"  cy="160"  r="3"/>
+  <circle class="r-node-r" cx="200"  cy="160"  r="7"/>
+  <circle class="r-node"   cx="490"  cy="270"  r="3"/>
+  <circle class="r-node-r" cx="490"  cy="270"  r="7"/>
+  <circle class="r-node"   cx="830"  cy="185"  r="3.5"/>
+  <circle class="r-node-r" cx="830"  cy="185"  r="9"/>
+  <circle class="r-node"   cx="1190" cy="330"  r="3"/>
+  <circle class="r-node-r" cx="1190" cy="330"  r="7"/>
+  <circle class="r-node"   cx="330"  cy="685"  r="3"/>
+  <circle class="r-node-r" cx="330"  cy="685"  r="7"/>
+  <circle class="r-node"   cx="770"  cy="545"  r="4"/>
+  <circle class="r-node-r" cx="770"  cy="545"  r="10"/>
+  <circle class="r-node"   cx="1110" cy="685"  r="3"/>
+  <circle class="r-node-r" cx="1110" cy="685"  r="7"/>
+  <circle class="r-node"   cx="1465" cy="205"  r="3"/>
+  <circle class="r-node-r" cx="1465" cy="205"  r="7"/>
+</svg>
 <div class="progress"><div class="progress-fill" id="progressBar"></div></div>
-<nav class="rail" id="rail" aria-label="Slide navigation"></nav>
-
-<!-- ── SLIDES ─────────────────────────────────────────────────────────────── -->
-<main class="deck" id="deck">
-
-  <!-- 01 TITLE ─────────────────────────────────────────────────────────────── -->
-  <section class="slide" id="s0" data-label="Title">
-    <div class="inner">
-      <div class="title-eyebrow">automated code review · azure devops · ai-powered</div>
-      <div class="title-agent">
-        <div class="agent-icon">🤖</div>
-      </div>
-      <h1 class="htitle">CodeReview<span style="color:var(--accent)">Agent</span></h1>
-      <p class="lead">An in-house AI agent built on Azure Functions and Azure AI Foundry that reviews pull requests automatically inside ADO — triggered by a simple PR comment, customisable per repository.</p>
-      <div class="title-meta">
-        <span><b>Runtime:</b> Azure Functions</span>
-        <span><b>Model:</b> Azure AI Foundry</span>
-        <span><b>Integration:</b> Azure DevOps PR Comments</span>
-        <span><b>Customisation:</b> Three-layer prompting</span>
-      </div>
-    </div>
-    <div class="snum"><b>01</b> / 14</div>
-  </section>
-
-  <!-- 02 AGENDA ───────────────────────────────────────────────────────────── -->
-  <section class="slide" id="s1" data-label="Agenda">
-    <div class="inner">
-      <div class="brow">agenda</div>
-      <h1 class="htitle">What we'll cover</h1>
-      <div class="agenda">
-        <div class="ai"><span class="an">01</span><span class="at">Why automated code review — the problem we're solving</span><span class="atag">context</span></div>
-        <div class="ai"><span class="an">02</span><span class="at">What CodeReviewAgent is and how it's built</span><span class="atag az">built here</span></div>
-        <div class="ai"><span class="an">03</span><span class="at">Triggering it — four commands inside ADO PR comments</span><span class="atag">/commands</span></div>
-        <div class="ai"><span class="an">04</span><span class="at">How a PR review flows end to end</span><span class="atag">flow</span></div>
-        <div class="ai"><span class="an">05</span><span class="at">Three-layer prompt architecture — the core design</span><span class="atag warn">layers</span></div>
-        <div class="ai"><span class="an">06</span><span class="at">Base layer — grounding, safety and security</span><span class="atag">base</span></div>
-        <div class="ai"><span class="an">07</span><span class="at">Layer 1 &amp; 2 — language prompts (all languages + SQL, CS, TS, TSX)</span><span class="atag">L1 · L2</span></div>
-        <div class="ai"><span class="an">08</span><span class="at">Layer 3 — repo-specific custom instructions</span><span class="atag">L3</span></div>
-        <div class="ai"><span class="an">09</span><span class="at">Architecture diagram</span><span class="atag az">design</span></div>
-        <div class="ai"><span class="an">10</span><span class="at">Analytics — PRs reviewed, cost per review, top repos</span><span class="atag">metrics</span></div>
-        <div class="ai"><span class="an">11</span><span class="at">Benefits, guardrails, and next steps</span><span class="atag">wrap-up</span></div>
-      </div>
-    </div>
-    <div class="snum"><b>02</b> / 14</div>
-  </section>
-
-  <!-- 03 THE PROBLEM ───────────────────────────────────────────────────────── -->
-  <section class="slide" id="s2" data-label="The Problem">
-    <div class="inner">
-      <div class="brow warn">the problem</div>
-      <h1 class="htitle">Code review is a bottleneck</h1>
-      <p class="lead">Developers wait. Reviewers miss patterns under time pressure. Security issues slip through when nobody checks every file. This is the gap CodeReviewAgent fills.</p>
-      <div class="prob-grid">
-        <div class="prob">
-          <div class="prob-n">PAIN 01</div>
-          <h3>Review lag</h3>
-          <p>PRs sit open waiting for a reviewer who's busy. Merge delays compound, blocking downstream work.</p>
-        </div>
-        <div class="prob">
-          <div class="prob-n">PAIN 02</div>
-          <h3>Inconsistent depth</h3>
-          <p>Review quality varies by reviewer, time of day and PR size. Large PRs get less scrutiny than small ones.</p>
-        </div>
-        <div class="prob">
-          <div class="prob-n">PAIN 03</div>
-          <h3>Security blind spots</h3>
-          <p>SQL injection, exposed secrets and insecure patterns need a trained eye on every file — manual review rarely delivers that consistently.</p>
-        </div>
-      </div>
-    </div>
-    <div class="snum"><b>03</b> / 14</div>
-  </section>
-
-  <!-- 04 WHAT IT IS ────────────────────────────────────────────────────────── -->
-  <section class="slide" id="s3" data-label="What It Is">
-    <div class="inner">
-      <div class="brow az">built in-house</div>
-      <h1 class="htitle">CodeReviewAgent — built here, owned here</h1>
-      <p class="lead">Not a third-party plugin. A first-party agent built on Azure Functions and Azure AI Foundry, integrated directly into ADO — so every instruction, every prompt layer, and every model choice is ours.</p>
-      <div class="built-strip">
-        <div class="bs" style="--c:var(--accent)">
-          <div class="bsl">Trigger layer</div>
-          <h3>Azure DevOps</h3>
-          <p>Listens for PR comment events. No new tooling for developers — they stay in the ADO PR they already have open.</p>
-        </div>
-        <div class="bs" style="--c:var(--azure)">
-          <div class="bsl">Runtime layer</div>
-          <h3>Azure Functions</h3>
-          <p>Serverless, event-driven. A webhook fires on a matching comment and the function handles the review lifecycle end to end.</p>
-        </div>
-        <div class="bs" style="--c:var(--warn)">
-          <div class="bsl">Intelligence layer</div>
-          <h3>Azure AI Foundry</h3>
-          <p>The model used for all review, security analysis, description and Q&amp;A — model choice and version are controlled by the team.</p>
-        </div>
-      </div>
-    </div>
-    <div class="snum"><b>04</b> / 14</div>
-  </section>
-
-  <!-- 05 COMMANDS ──────────────────────────────────────────────────────────── -->
-  <section class="slide" id="s4" data-label="Commands">
-    <div class="inner">
-      <div class="brow">@CodeReviewAgent</div>
-      <h1 class="htitle">Four commands, one place</h1>
-      <p class="lead">A developer mentions the agent in any PR comment. The command that follows determines what it does.</p>
-      <div class="cmd-grid">
-        <div class="cmd-card">
-          <div class="cmd-head">
-            <div class="cmd-token" style="--c:var(--accent)">/review</div>
-            <div class="cmd-badge">primary</div>
-          </div>
-          <div class="cmd-body">
-            <p>Full code review across all changed files. Checks code quality, logic, naming, error handling and best practices for each file's language.</p>
-            <div class="ex"><span class="pr">@nitro-team</span> opened this PR · 3 files changed<br><span class="ag">@CodeReviewAgent</span> <span class="cmd-t">/review</span></div>
-          </div>
-        </div>
-        <div class="cmd-card">
-          <div class="cmd-head">
-            <div class="cmd-token" style="--c:var(--azure)">/ask</div>
-          </div>
-          <div class="cmd-body">
-            <p>Ask any question about the PR — design decisions, implementation alternatives, what a specific function does. Answers in context of the actual diff.</p>
-            <div class="ex"><span class="ag">@CodeReviewAgent</span> <span class="cmd-t">/ask</span> why is the retry logic here instead of the caller?</div>
-          </div>
-        </div>
-        <div class="cmd-card">
-          <div class="cmd-head">
-            <div class="cmd-token" style="--c:var(--danger)">/security</div>
-          </div>
-          <div class="cmd-body">
-            <p>Dedicated security pass — injection risks, secret leakage, insecure deserialization, OWASP patterns, auth and permissions issues across the changed diff.</p>
-            <div class="ex"><span class="ag">@CodeReviewAgent</span> <span class="cmd-t">/security</span></div>
-          </div>
-        </div>
-        <div class="cmd-card">
-          <div class="cmd-head">
-            <div class="cmd-token" style="--c:var(--ok)">/describe</div>
-          </div>
-          <div class="cmd-body">
-            <p>Generates a structured PR description — what changed, why it matters, testing notes — useful for large PRs or when reviewers need a quick orient.</p>
-            <div class="ex"><span class="ag">@CodeReviewAgent</span> <span class="cmd-t">/describe</span></div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="snum"><b>05</b> / 14</div>
-  </section>
-
-  <!-- 06 TRIGGER FLOW ─────────────────────────────────────────────────────── -->
-  <section class="slide" id="s5" data-label="Review Flow">
-    <div class="inner">
-      <div class="brow az">end to end</div>
-      <h1 class="htitle">From comment to review in seconds</h1>
-      <div class="tflow">
-        <div class="tflow-row">
-          <div class="tflow-icon" style="--c:var(--azure)">💬</div>
-          <div class="tflow-body">
-            <h4>Developer comments on the PR</h4>
-            <p>Any PR comment mentioning <span class="ic">@CodeReviewAgent</span> followed by a valid command is the trigger — no form, no UI, no new tab.</p>
-          </div>
-        </div>
-        <div class="tflow-row">
-          <div class="tflow-icon" style="--c:var(--azure)">🔔</div>
-          <div class="tflow-body">
-            <h4>ADO fires a webhook</h4>
-            <p>Azure DevOps emits a comment-created event to the registered Function endpoint. The function validates the payload and extracts the command.</p>
-            <span class="chip">POST /api/code-review-agent</span>
-          </div>
-        </div>
-        <div class="tflow-row">
-          <div class="tflow-icon" style="--c:var(--accent)">🏗️</div>
-          <div class="tflow-body">
-            <h4>Azure Function assembles the prompt</h4>
-            <p>It pulls the diff from ADO, identifies file types, and stacks the three prompt layers in order — base, then language (L1/L2), then repo instructions (L3).</p>
-          </div>
-        </div>
-        <div class="tflow-row">
-          <div class="tflow-icon" style="--c:var(--warn)">🧠</div>
-          <div class="tflow-body">
-            <h4>Foundry model reviews the diff</h4>
-            <p>The assembled prompt is sent to Azure AI Foundry. The model reads the code through the lens of all active instruction layers.</p>
-          </div>
-        </div>
-        <div class="tflow-row">
-          <div class="tflow-icon" style="--c:var(--ok)">✅</div>
-          <div class="tflow-body">
-            <h4>Response posted back to the PR</h4>
-            <p>The review, answer, security report, or description is posted as a new PR comment — appearing inline in the same conversation that triggered it.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="snum"><b>06</b> / 14</div>
-  </section>
-
-  <!-- 07 THREE LAYERS ─────────────────────────────────────────────────────── -->
-  <section class="slide" id="s6" data-label="Layer Architecture">
-    <div class="inner">
-      <div class="brow warn">prompt architecture — the core design</div>
-      <h1 class="htitle">Three layers of instruction</h1>
-      <p class="lead" style="margin-bottom:0;">Every review is assembled from three stacked prompt layers. Each one is additive — a later layer never replaces an earlier one, it extends it.</p>
-      <div class="layer-stage">
-        <div class="layer-stack" aria-label="Three stacked prompt layers visualization">
-          <div class="layer-plate l0">
-            <div class="lp-num">Base Layer — always active</div>
-            <div class="lp-title">Grounding &amp; Safety</div>
-            <div class="lp-sub">security · tone · output format · guardrails</div>
-          </div>
-          <div class="layer-plate l1">
-            <div class="lp-num">Layer 1 — always active</div>
-            <div class="lp-title">All Languages</div>
-            <div class="lp-sub">logic · naming · patterns · error handling</div>
-          </div>
-          <div class="layer-plate l2">
-            <div class="lp-num">Layer 2 — file-type matched</div>
-            <div class="lp-title">Language-Specific</div>
-            <div class="lp-sub">Review.sql.md · Review.cs.md · Review.ts.md · Review.tsx.md</div>
-          </div>
-        </div>
-        <div class="layer-desc">
-          <div class="ld" style="--ldc:var(--danger)">
-            <h4>Base layer — the floor</h4>
-            <p>Applied to every single request regardless of command or language. Sets the model's role, tone, output format, safety boundaries, and non-negotiable security checks. Cannot be overridden by later layers.</p>
-          </div>
-          <div class="ld" style="--ldc:var(--accent)">
-            <h4>Layer 1 — language-agnostic quality</h4>
-            <p>Default review prompts for code quality, readability, naming conventions, error handling and architectural patterns — applicable to every supported language without distinction.</p>
-          </div>
-          <div class="ld" style="--ldc:var(--azure)">
-            <h4>Layer 2 — language-specific depth</h4>
-            <p>Adds targeted checks per file type. A <span class="ic">.sql</span> file gets SQL-specific injection checks, index and query plan guidance. A <span class="ic">.ts</span> file gets strict-mode, type-safety and async-pattern review. Multiple layers activate in a single PR if it touches multiple file types.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="snum"><b>07</b> / 14</div>
-  </section>
-
-  <!-- 08 BASE LAYER ────────────────────────────────────────────────────────── -->
-  <section class="slide" id="s7" data-label="Base Layer">
-    <div class="inner">
-      <div class="brow warn">base layer</div>
-      <h1 class="htitle">Grounding, safety &amp; security — the non-negotiable floor</h1>
-      <p class="lead">The base layer is a constant. It defines how the agent behaves across every command, every repo, every file type. Subsequent layers add onto it — they cannot remove from it.</p>
-      <div class="lg-grid">
-        <div class="lgc">
-          <div class="lgc-head"><div class="dot" style="--dc:var(--danger)"></div><span>base-layer.md — safety &amp; guardrails</span></div>
-          <div class="lgc-body">
-            <p><strong style="color:var(--text)">Model grounding.</strong> Instructs the model to act as a code reviewer, not an assistant — focused, factual, and specific to the diff only.</p>
-            <p><strong style="color:var(--text)">No hallucinated references.</strong> The model may only reference what is visible in the changed files and the repository's declared dependencies.</p>
-            <p><strong style="color:var(--text)">Confidentiality.</strong> The agent never echoes back secrets, environment variables or credential-like strings it encounters in the diff.</p>
-            <p><strong style="color:var(--text)">Non-opinionated tone.</strong> Findings are reported as observations with rationale, not mandates — the developer retains decision authority.</p>
-          </div>
-        </div>
-        <div class="lgc">
-          <div class="lgc-head"><div class="dot" style="--dc:var(--warn)"></div><span>base-layer.md — always-on security</span></div>
-          <div class="lgc-body">
-            <p><strong style="color:var(--text)">Secret detection.</strong> Flags any string that looks like an API key, token, password or connection string — even in comments.</p>
-            <p><strong style="color:var(--text)">Injection surface.</strong> Checks every string-interpolation pattern that touches an external system (SQL, shell, XML, LDAP).</p>
-            <p><strong style="color:var(--text)">Auth and access.</strong> Flags missing authorisation checks, direct object references, and overly permissive roles.</p>
-            <p><strong style="color:var(--text)">Dependency flags.</strong> Notes newly added packages and recommends checking their vulnerability status.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="snum"><b>08</b> / 14</div>
-  </section>
-
-  <!-- 09 L1 + L2 ──────────────────────────────────────────────────────────── -->
-  <section class="slide" id="s8" data-label="L1 + L2 Prompts">
-    <div class="inner">
-      <div class="brow">layer 1 &amp; layer 2</div>
-      <h1 class="htitle">Language coverage — broad by default, deep when needed</h1>
-      <p class="lead">Layer 1 fires for every file. Layer 2 is matched per file extension — one review pass, multiple layers active simultaneously if the PR touches multiple languages.</p>
-      <div class="lg-grid">
-        <div class="lgc">
-          <div class="lgc-head"><div class="dot" style="--dc:var(--accent)"></div><span>Layer 1 — default.md · all languages</span></div>
-          <div class="lgc-body">
-            <p>Code clarity and naming conventions. Logic correctness and edge-case coverage. Error handling completeness. Dead code and redundant imports. Magic numbers and undocumented assumptions. Test coverage of new behaviour.</p>
-            <div class="langs">
-              <span class="lang">C#</span><span class="lang">TypeScript</span><span class="lang">JavaScript</span><span class="lang">SQL</span><span class="lang">Python</span><span class="lang">PowerShell</span><span class="lang">Bicep</span><span class="lang">YAML</span><span class="lang">JSON</span><span class="lang">+ any</span>
-            </div>
-          </div>
-        </div>
-        <div class="lgc">
-          <div class="lgc-head"><div class="dot" style="--dc:var(--azure)"></div><span>Layer 2 — file-matched specialist prompts</span></div>
-          <div class="lgc-body">
-            <p><strong style="color:var(--text)">Review.sql.md</strong> — parameterised queries, N+1 patterns, index usage, transaction scope, stored-proc risks.</p>
-            <p><strong style="color:var(--text)">Review.cs.md</strong> — nullable safety, async/await correctness, LINQ efficiency, DI pattern adherence, exception handling.</p>
-            <p><strong style="color:var(--text)">Review.ts.md</strong> — strict-mode types, any/unknown discipline, Promise chains, module boundaries.</p>
-            <p><strong style="color:var(--text)">Review.tsx.md</strong> — component decomposition, hook rules, memoisation, accessibility, key stability.</p>
-            <div class="langs">
-              <span class="lang" style="--lbc:rgba(76,168,240,.3);--lbg:rgba(76,168,240,.06);--ltc:var(--azure)">.sql</span>
-              <span class="lang" style="--lbc:rgba(76,168,240,.3);--lbg:rgba(76,168,240,.06);--ltc:var(--azure)">.cs</span>
-              <span class="lang" style="--lbc:rgba(76,168,240,.3);--lbg:rgba(76,168,240,.06);--ltc:var(--azure)">.ts</span>
-              <span class="lang" style="--lbc:rgba(76,168,240,.3);--lbg:rgba(76,168,240,.06);--ltc:var(--azure)">.tsx</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="snum"><b>09</b> / 14</div>
-  </section>
-
-  <!-- 10 LAYER 3 ───────────────────────────────────────────────────────────── -->
-  <section class="slide" id="s9" data-label="Layer 3">
-    <div class="inner">
-      <div class="brow ok">layer 3 — optional, per-repo</div>
-      <h1 class="htitle">Customised per repository</h1>
-      <p class="lead">Any repo can pass its own review instructions by placing a file in its root. The agent picks them up automatically — no deployment or configuration change required.</p>
-      <div class="repo-twocol">
-        <div class="code-block">
-          <div class="cb-head">📁 repo-root / .github / instructions</div>
-          <div class="cb-body">
-<span class="cm"># repo-specific instructions for CodeReviewAgent</span>
-<span class="cm"># picked up automatically when this repo is reviewed</span>
-
-<span class="ky">focus_areas</span>:
-  - <span class="vl">Performance: flag any DB call inside a loop</span>
-  - <span class="vl">Naming: follow our domain-model glossary</span>
-  - <span class="vl">Auth: all API endpoints must have [Authorize]</span>
-
-<span class="ky">suppress</span>:
-  - <span class="vl">line-length warnings (we use 140-char width)</span>
-
-<span class="ky">style</span>:
-  - <span class="vl">Use our internal terminology: "Member" not "User"</span>
-  - <span class="vl">Reference ADO work items where known</span>
+<nav class="rail" id="rail"></nav>
+<div class="slide-toast" id="slideToast"></div>
+<div class="pres-toolbar">
+  <button class="pres-btn" onclick="toggleSettings()" title="Settings (S)" aria-label="Settings">&#9881;</button>
+  <button class="pres-btn" onclick="toggleHelp()" title="Help (?)" aria-label="Help">?</button>
 </div>
-        </div>
-        <div class="repo-list">
-          <div class="rli">
-            <div class="rli-ic">01</div>
-            <p><b>Zero deployment needed.</b> The agent checks for the file at review time. Add or edit it and the next review uses it — no PR to the agent repo required.</p>
-          </div>
-          <div class="rli">
-            <div class="rli-ic">02</div>
-            <p><b>Additive, not overriding.</b> Layer 3 instructions extend the base and language layers — they cannot suppress the base layer's safety and security checks.</p>
-          </div>
-          <div class="rli">
-            <div class="rli-ic">03</div>
-            <p><b>Context-aware terminology.</b> If your domain uses specific names for entities, components or patterns, put them here — the agent will use and recognise them.</p>
-          </div>
-          <div class="rli">
-            <div class="rli-ic">04</div>
-            <p><b>Team-owned, version-controlled.</b> The file lives in the repo, so changes are reviewed and tracked like any other configuration decision.</p>
-          </div>
-        </div>
-      </div>
+<div class="settings-panel" id="settingsPanel">
+  <div class="settings-head">Settings<button class="help-close" onclick="toggleSettings()" aria-label="Close">&#10005;</button></div>
+  <div class="settings-section">
+    <div class="settings-section-title">Appearance</div>
+    <div class="settings-item"><span>Animations</span><button class="toggle-switch on" id="togAnims" onclick="flipSetting('anims',this)" aria-label="Toggle animations"></button></div>
+    <div class="settings-item"><span>Terminal animation</span><button class="toggle-switch on" id="togTermAnim" onclick="flipSetting('termAnim',this)" aria-label="Toggle terminal animation"></button></div>
+  </div>
+  <div class="settings-section">
+    <div class="settings-section-title">Typography</div>
+    <div class="settings-item"><span>Font size</span><div class="font-size-control"><button class="font-size-btn" onclick="changeFontSize(-0.05)" aria-label="Decrease">&#8722;</button><span class="font-size-value" id="fontSizeLabel">100%</span><button class="font-size-btn" onclick="changeFontSize(0.05)" aria-label="Increase">+</button></div></div>
+  </div>
+  <div class="settings-note">Press <kbd>S</kbd> to toggle &middot; <kbd>?</kbd> for shortcuts</div>
+</div>
+<div class="help-overlay" id="helpOverlay" onclick="if(event.target===this)toggleHelp()">
+  <div class="help-box">
+    <div class="help-head">Keyboard shortcuts<button class="help-close" onclick="toggleHelp()">&#10005;</button></div>
+    <div class="help-grid">
+      <span class="hk">&#8595; / Space / PageDown</span><span class="hd">Next slide</span>
+      <span class="hk">&#8593; / PageUp</span><span class="hd">Previous slide</span>
+      <span class="hk">S</span><span class="hd">Settings panel</span>
+      <span class="hk">?</span><span class="hd">This help screen</span>
+      <span class="hk">F</span><span class="hd">Fullscreen current diagram</span>
+      <span class="hk">Esc</span><span class="hd">Close any overlay</span>
     </div>
-    <div class="snum"><b>10</b> / 14</div>
-  </section>
+    <div class="help-footer">Rail dots on the left jump to any slide &middot; Click &#x26F6; on any diagram to expand</div>
+  </div>
+</div>
+<div class="mermaid-overlay" id="mermaidOverlay" onclick="closeMmdFS()">
+  <div class="mermaid-overlay-box" onclick="event.stopPropagation()">
+    <div class="mermaid-overlay-toolbar">
+      <div class="mermaid-zoom-btns">
+        <button class="mermaid-zoom-btn" onclick="mmdZoom(-0.2)" title="Zoom out">&#8722;</button>
+        <button class="mermaid-zoom-btn" id="mmdZoomLbl" onclick="mmdZoom(0)" style="font-size:.72rem;min-width:3.2rem">100%</button>
+        <button class="mermaid-zoom-btn" onclick="mmdZoom(0.2)" title="Zoom in">+</button>
+      </div>
+      <button class="mermaid-overlay-close" onclick="closeMmdFS()" title="Close (Esc)">&#10005;</button>
+    </div>
+    <div class="mermaid-viewport" id="mmdViewport"><div id="mermaidOverlayContent"></div></div>
+  </div>
+</div>
+<div class="slide-nav" id="slideNav">
+  <button class="slide-nav-btn" id="navUp" title="Previous slide (&#8593;)" aria-label="Previous slide" onclick="navigate(-1)" disabled>
+    <svg width="12" height="12" viewBox="0 0 13 13" fill="none"><path d="M1.5 8.5L6.5 3.5L11.5 8.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <span class="slide-nav-sep" id="navLbl">01 / 15</span>
+  <button class="slide-nav-btn" id="navDown" title="Next slide (&#8595;)" aria-label="Next slide" onclick="navigate(1)">
+    <svg width="12" height="12" viewBox="0 0 13 13" fill="none"><path d="M1.5 4.5L6.5 9.5L11.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+</div>
+<main class="deck" id="deck"><!-- 01 TITLE -->
+<section class="slide" id="s0" data-label="Title" data-font-scale="1.18">
+<div class="inner">
+<div class="title-eyebrow">func start --port 7071 --verbose</div>
+<div class="agent-icon">&#129302;</div>
+<h1 class="htitle">CodeReview<span style="color:var(--accent)">Agent</span></h1>
+<p class="lead">An in-house AI agent that automatically reviews ADO pull requests — triggered by a service hook, processed by Azure Functions, powered by Azure AI Foundry. Built, owned, and operated by the team.</p>
+<div class="stat-chips">
+<div class="stat-chip" style="--bc:rgba(0,212,255,.22);--bk:rgba(0,212,255,.06);--tc:var(--accent)"><b>709</b> PRs / month (apt-web)</div>
+<div class="stat-chip" style="--bc:rgba(78,205,196,.3);--bk:rgba(78,205,196,.06);--tc:var(--ok)"><b>~$38</b> / month mixed routing</div>
+<div class="stat-chip" style="--bc:rgba(76,168,240,.3);--bk:rgba(76,168,240,.06);--tc:var(--azure)">30&#8211;90s response time</div>
+<div class="stat-chip" style="--bc:rgba(255,179,71,.3);--bk:rgba(255,179,71,.06);--tc:var(--warn)">.NET 10 &middot; Azure Functions v4 isolated</div>
+<div class="stat-chip" style="--bc:rgba(74,84,104,.35);--bk:rgba(74,84,104,.08);--tc:var(--text-dim)">gpt-5.3-codex default</div>
+</div>
+</div>
+<div class="snum"><b>01</b> / 15</div>
+</section>
 
-  <!-- 11 ARCHITECTURE ─────────────────────────────────────────────────────── -->
-  <section class="slide" id="s10" data-label="Architecture">
-    <div class="inner">
-      <div class="brow az">architecture</div>
-      <h1 class="htitle">System design</h1>
-      <p class="lead">The agent is a thin orchestration layer — ADO owns the code and the conversation thread; Azure Functions owns the logic; Foundry owns the intelligence.</p>
-      <div class="arch-frame">
-        <div class="arch-label">architecture diagram — placeholder for detailed design</div>
-        <div class="arch-nodes">
-          <div class="arch-node">
-            <div class="icn">👤</div>
-            <div class="ln">Developer</div>
-            <div class="nm">PR Comment</div>
-          </div>
-          <div class="arch-arr">──▶</div>
-          <div class="arch-node hi">
-            <div class="icn">📋</div>
-            <div class="ln">Azure DevOps</div>
-            <div class="nm">Webhook</div>
-          </div>
-          <div class="arch-arr">──▶</div>
-          <div class="arch-node hi">
-            <div class="icn">⚡</div>
-            <div class="ln">Azure Functions</div>
-            <div class="nm">Orchestrator</div>
-          </div>
-          <div class="arch-arr">──▶</div>
-          <div class="arch-node">
-            <div class="icn">🧠</div>
-            <div class="ln">Azure AI Foundry</div>
-            <div class="nm">Model</div>
-          </div>
-        </div>
-        <div style="margin-top:1.5rem; display:flex; gap:.8rem; justify-content:center; flex-wrap:wrap;">
-          <div class="arch-node" style="min-width:90px;">
-            <div class="icn">📁</div>
-            <div class="ln">ADO</div>
-            <div class="nm">PR Diff</div>
-          </div>
-          <div class="arch-arr" style="align-self:center;">──▶</div>
-          <div class="arch-node" style="min-width:90px;">
-            <div class="icn">📝</div>
-            <div class="ln">Functions</div>
-            <div class="nm">Layer Stack</div>
-          </div>
-          <div class="arch-arr" style="align-self:center;">◀──</div>
-          <div class="arch-node" style="min-width:90px;">
-            <div class="icn">📂</div>
-            <div class="ln">Repo Root</div>
-            <div class="nm">.github/instructions</div>
-          </div>
-        </div>
-        <div class="arch-note">// detailed sequence diagram and infra-as-code diagram to be added here</div>
-      </div>
-    </div>
-    <div class="snum"><b>11</b> / 14</div>
-  </section>
+<!-- 02 AGENDA -->
+<section class="slide" id="s1" data-label="Agenda" data-font-scale="0.93">
+<div class="inner">
+<div class="brow">cat architecture-overview.md</div>
+<h1 class="htitle">What we&#8217;re covering today</h1>
+<div class="agenda">
+<div class="ai"><span class="an">01</span><span class="at">Commands Reference</span><span class="atag">ux</span></div>
+<div class="ai"><span class="an">02</span><span class="at">System Architecture</span><span class="atag az">arch</span></div>
+<div class="ai"><span class="an">03</span><span class="at">End-to-End Request Flow</span><span class="atag az">arch</span></div>
+<div class="ai"><span class="an">04</span><span class="at">WebhookReceiver Pipeline</span><span class="atag">runtime</span></div>
+<div class="ai"><span class="an">05</span><span class="at">ReviewProcessor Pipeline</span><span class="atag">runtime</span></div>
+<div class="ai"><span class="an">06</span><span class="at">Prompt Architecture &#8212; 3 Layers</span><span class="atag warn">prompts</span></div>
+<div class="ai"><span class="an">07</span><span class="at">File Selection &amp; Diff Processing</span><span class="atag">runtime</span></div>
+<div class="ai"><span class="an">08</span><span class="at">Iterative Reviews &amp; Thread Management</span><span class="atag">runtime</span></div>
+<div class="ai"><span class="an">09</span><span class="at">Security Architecture</span><span class="atag danger">security</span></div>
+<div class="ai"><span class="an">10</span><span class="at">Monitoring &amp; Observability</span><span class="atag ok">ops</span></div>
+<div class="ai"><span class="an">11</span><span class="at">Cost Model &#8212; Projected Estimates</span><span class="atag ok">cost</span></div>
+<div class="ai"><span class="an">12</span><span class="at">Live Metrics &#8212; apt-web Pilot</span><span class="atag ok">live</span></div>
+</div>
+</div>
+<div class="snum"><b>02</b> / 15</div>
+</section>
 
-  <!-- 12 ANALYTICS ────────────────────────────────────────────────────────── -->
-  <section class="slide" id="s11" data-label="Analytics">
-    <div class="inner">
-      <div class="brow ok">analytics — sample data</div>
-      <h1 class="htitle">Review metrics at a glance</h1>
-      <p class="lead" style="margin-bottom:0;">Tracking volume, cost efficiency and adoption across teams — sample figures, replace with live data from your telemetry pipeline.</p>
-      <div class="metrics-row">
-        <div class="metric">
-          <div class="mt">PRs REVIEWED · 30 DAYS</div>
-          <div class="mv" style="--mc:var(--accent);--mc2:#5540FF">247</div>
-          <div class="ms">↑ 18% from last month</div>
-        </div>
-        <div class="metric">
-          <div class="mt">REVIEWS POSTED</div>
-          <div class="mv" style="--mc:var(--azure);--mc2:#2F7EC7">614</div>
-          <div class="ms">avg 2.5 per PR</div>
-        </div>
-        <div class="metric">
-          <div class="mt">COST PER REVIEW</div>
-          <div class="mv" style="--mc:var(--ok);--mc2:#2BA89E">$0.04</div>
-          <div class="ms">tokens · Foundry pricing</div>
-        </div>
-        <div class="metric">
-          <div class="mt">SECURITY ISSUES FLAGGED</div>
-          <div class="mv" style="--mc:var(--warn);--mc2:#CC7A00">38</div>
-          <div class="ms warn">12 high · 26 medium</div>
-        </div>
-      </div>
-      <div class="analytics-lower">
-        <div class="bar-chart">
-          <h4>Reviews by command — last 30 days</h4>
-          <div class="bar-row">
-            <div class="bar-label">/review</div>
-            <div class="bar-track"><div class="bar-fill" style="--bc:var(--accent);width:82%"></div></div>
-            <div class="bar-val">82%</div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-label">/security</div>
-            <div class="bar-track"><div class="bar-fill" style="--bc:var(--danger);width:9%"></div></div>
-            <div class="bar-val">9%</div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-label">/ask</div>
-            <div class="bar-track"><div class="bar-fill" style="--bc:var(--azure);width:6%"></div></div>
-            <div class="bar-val">6%</div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-label">/describe</div>
-            <div class="bar-track"><div class="bar-fill" style="--bc:var(--ok);width:3%"></div></div>
-            <div class="bar-val">3%</div>
-          </div>
-          <div style="margin-top:1.2rem;border-top:1px solid var(--border-soft);padding-top:1rem;">
-            <h4 style="margin-bottom:.8rem;">Review findings breakdown</h4>
-            <div class="bar-row">
-              <div class="bar-label">Quality</div>
-              <div class="bar-track"><div class="bar-fill" style="--bc:var(--accent);width:51%"></div></div>
-              <div class="bar-val">51%</div>
-            </div>
-            <div class="bar-row">
-              <div class="bar-label">Security</div>
-              <div class="bar-track"><div class="bar-fill" style="--bc:var(--danger);width:24%"></div></div>
-              <div class="bar-val">24%</div>
-            </div>
-            <div class="bar-row">
-              <div class="bar-label">Performance</div>
-              <div class="bar-track"><div class="bar-fill" style="--bc:var(--warn);width:16%"></div></div>
-              <div class="bar-val">16%</div>
-            </div>
-            <div class="bar-row">
-              <div class="bar-label">Tests</div>
-              <div class="bar-track"><div class="bar-fill" style="--bc:var(--ok);width:9%"></div></div>
-              <div class="bar-val">9%</div>
-            </div>
-          </div>
-        </div>
-        <div class="pr-table">
-          <h4>Top repos by PR volume</h4>
-          <div class="pr-row">
-            <div class="repo-n">platform/api-gateway</div>
-            <div class="pr-c">54</div>
-            <div class="pr-s" style="--bc:rgba(124,110,255,.3);--tc:var(--accent)">L3 active</div>
-          </div>
-          <div class="pr-row">
-            <div class="repo-n">apps/web-portal</div>
-            <div class="pr-c">41</div>
-            <div class="pr-s" style="--bc:rgba(124,110,255,.3);--tc:var(--accent)">L3 active</div>
-          </div>
-          <div class="pr-row">
-            <div class="repo-n">data/reporting-svc</div>
-            <div class="pr-c">38</div>
-            <div class="pr-s" style="--bc:rgba(74,84,104,.4);--tc:var(--text-faint)">base only</div>
-          </div>
-          <div class="pr-row">
-            <div class="repo-n">infra/bicep-modules</div>
-            <div class="pr-c">27</div>
-            <div class="pr-s" style="--bc:rgba(74,84,104,.4);--tc:var(--text-faint)">base only</div>
-          </div>
-          <div class="pr-row">
-            <div class="repo-n">libs/shared-ui</div>
-            <div class="pr-c">22</div>
-            <div class="pr-s" style="--bc:rgba(124,110,255,.3);--tc:var(--accent)">L3 active</div>
-          </div>
-          <div class="pr-row">
-            <div class="repo-n">apps/mobile-bff</div>
-            <div class="pr-c">19</div>
-            <div class="pr-s" style="--bc:rgba(74,84,104,.4);--tc:var(--text-faint)">base only</div>
-          </div>
-          <div class="pr-row" style="background:rgba(124,110,255,.04)">
-            <div class="repo-n" style="color:var(--text-faint)">+ 14 more repos</div>
-            <div class="pr-c" style="color:var(--text-dim)">46</div>
-            <div class="pr-s" style="--bc:rgba(74,84,104,.3);--tc:var(--text-faint)">various</div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="snum"><b>12</b> / 14</div>
-  </section>
+<!-- 03 COMMANDS — UX first -->
+<section class="slide" id="s7" data-label="Commands" data-font-scale="0.85">
+<div class="inner">
+<div class="brow">@CodeReviewAgent --help</div>
+<h1 class="htitle">All commands &#8212; post in any PR comment</h1>
+<p class="lead" style="margin-bottom:1rem">Mention <span class="ic">&#64;CodeReviewAgent</span> anywhere in a PR comment. Commands are case-insensitive; leading <span class="ic">/</span> is optional. <span class="ic">--force</span> bypasses dedup history. <span class="ic">--full</span> sends complete file content instead of diff hunks. Both flags combine: <span class="ic">/review --force --full</span></p>
+<div class="mode-table">
+<div class="mode-table-head"><div>Comment</div><div>Mode</div><div>Model</div><div>What it does</div></div>
+<div class="mode-row"><div class="cmd">&#64;CodeReviewAgent</div><div class="mode">FullReview</div><div class="model" style="color:var(--accent)">gpt-5.3-codex</div><div class="note">Auto on PR create/update + on-demand full review against all team standards</div></div>
+<div class="mode-row"><div class="cmd">/review --force</div><div class="mode">FullReview</div><div class="model" style="color:var(--accent)">gpt-5.3-codex</div><div class="note">Re-review ignoring all previous comment thread history &#8212; fresh findings only</div></div>
+<div class="mode-row"><div class="cmd">/review --full</div><div class="mode">FullReview</div><div class="model" style="color:var(--accent)">gpt-5.3-codex</div><div class="note">Sends complete file content &#8212; every line checked (higher token cost, use for SQL/legacy)</div></div>
+<div class="mode-row"><div class="cmd">/review src/Svc.cs</div><div class="mode">FileReview</div><div class="model" style="color:var(--accent)">gpt-5.3-codex</div><div class="note">Single file, always full content; path traversal (..) validated server-side</div></div>
+<div class="mode-row"><div class="cmd">/security</div><div class="mode">SecurityOnly</div><div class="model" style="color:var(--accent)">gpt-5.3-codex</div><div class="note">CRITICAL/HIGH/MEDIUM &#8212; OWASP: injection, secrets, auth, insecure deserialisation</div></div>
+<div class="mode-row"><div class="cmd">/summary</div><div class="mode">Summarize</div><div class="model" style="color:var(--ok)">Bot__SummarizeDeploymentName</div><div class="note">Plain-English summary reply posted on the triggering comment thread</div></div>
+<div class="mode-row"><div class="cmd">/draft</div><div class="mode">Describe</div><div class="model" style="color:var(--ok)">Bot__DescribeDeploymentName</div><div class="note">Updates PR title with [XS&#8211;XL] size prefix + appends AI description section</div></div>
+<div class="mode-row"><div class="cmd">/ask &lt;question&gt;</div><div class="mode">Ask</div><div class="model" style="color:var(--ok)">Bot__AskDeploymentName</div><div class="note">Answer grounded in PR diff &#8212; repeatable; great for design Q&amp;A during review</div></div>
+<div class="mode-row"><div class="cmd">/help</div><div class="mode">Help</div><div class="model" style="color:var(--text-faint)">&#8212; none &#8212;</div><div class="note">Static command reference posted instantly, no AI call made</div></div>
+</div>
+<p style="margin-top:.9rem;font-family:var(--font-m);font-size:.72rem;color:var(--text-faint)">// Override per-mode deployment: Bot__ReviewDeploymentName &middot; Bot__SecurityDeploymentName &middot; Bot__SummarizeDeploymentName &middot; Bot__DescribeDeploymentName &middot; Bot__AskDeploymentName</p>
+</div>
+<div class="snum"><b>03</b> / 15</div>
+</section>
 
-  <!-- 13 BENEFITS + GUARDRAILS ─────────────────────────────────────────────── -->
-  <section class="slide" id="s12" data-label="Benefits">
-    <div class="inner">
-      <div class="brow ok">outcomes &amp; guardrails</div>
-      <h1 class="htitle">What it changes — and where humans stay in the loop</h1>
-      <div class="ben-grid">
-        <div class="ben"><div class="bt">speed</div><h4>Instant first feedback</h4><p>A developer gets structured feedback within seconds of posting the command — no waiting for a reviewer's calendar to clear.</p></div>
-        <div class="ben"><div class="bt">consistency</div><h4>Same depth on every PR</h4><p>The base and language layers don't have bad days. Every file gets the same security and quality pass, regardless of PR size or reviewer availability.</p></div>
-        <div class="ben"><div class="bt">security</div><h4>Security on every diff</h4><p>The base layer's always-on security check means no file reaches main without at least a first-pass scan for common vulnerabilities.</p></div>
-        <div class="ben"><div class="bt">adoption</div><h4>Zero new tooling for devs</h4><p>Developers stay in ADO. One comment is the entire interface — no new dashboard, no plugin, no context switch.</p></div>
-      </div>
-      <div class="guard-grid" style="margin-top:1.2rem;">
-        <div class="guard"><div class="gn">GUARDRAIL 01</div><h4>Advisory only</h4><p>The agent cannot merge, approve, or block PRs. All its output is a comment. The pull-request decision always belongs to a human reviewer.</p></div>
-        <div class="guard"><div class="gn">GUARDRAIL 02</div><h4>No secrets echoed</h4><p>The base layer instructs the model to never repeat credential-like strings from the diff, even in its analysis output.</p></div>
-        <div class="guard"><div class="gn">GUARDRAIL 03</div><h4>Diff-scoped only</h4><p>The model is given only the changed files, not the entire repository history — limiting both scope and cost per review call.</p></div>
-        <div class="guard"><div class="gn">GUARDRAIL 04</div><h4>L3 cannot override safety</h4><p>Repo-specific instructions are additive. No Layer 3 instruction can suppress base-layer security checks or change the agent's fundamental output format.</p></div>
-      </div>
-    </div>
-    <div class="snum"><b>13</b> / 14</div>
-  </section>
+<!-- 04 SYSTEM ARCHITECTURE -->
+<section class="slide" id="s2" data-label="System Architecture" data-font-scale="1.0">
+<div class="inner">
+<div class="brow az">az functionapp show --name func-codereviewer-prod --query defaultHostName</div>
+<h1 class="htitle">One Function App, all repos in the organisation</h1>
+<p class="lead">A single Azure Functions deployment services every project and repository in the ADO org. Onboarding a new project is three Service Hook configurations &#8212; no redeployment or code change required.</p>
+<div class="mermaid-wrap">
+<button class="mermaid-expand-btn" onclick="openMmdNear(this)" title="Fullscreen">&#x26F6;</button>
+<div class="mermaid" id="mmd-sys">
+flowchart TD
+    ADO["&#x2601; Azure DevOps\nService Hooks · 3 per project"]
+    WH["&#x1F50C; WebhookReceiver\nHTTP Trigger · POST /api/webhook"]
+    Q[("&#x2B21; pr-review-queue\nStorage Queue")]
+    RP["&#x2699; ReviewProcessor\nQueue Trigger · .NET 10 Isolated Worker"]
+    FND["&#x1F9E0; Azure AI Foundry\ngpt-5.3-codex"]
+    ADOOUT["&#x2601; Azure DevOps\nSummary Comment + Inline Threads"]
+    subgraph STORE["Azure Storage Account"]
+        Q
+        TBL[("&#x1F4CB; Tables\nBotReviewState · BotUsageLogs")]
+        BLOB[("&#x1F4E6; Blob\nai-responses")]
+    end
+    subgraph SEC["&#x1F511; Key Vault"]
+        KV["AdoPatToken\nAzureOpenAiApiKey\nWebhookSecret"]
+    end
+    AI_LOG["&#x1F4CA; App Insights\nCustom Events + Metrics"]
+    ADO -->|"POST webhook event"| WH
+    WH -->|"validate · dedup · enqueue"| Q
+    Q --> RP
+    RP -->|"fetch diff · fetch instructions"| ADO
+    RP -->|"prompt + diff"| FND
+    FND -->|"ReviewResult JSON"| RP
+    RP -->|"summary + inline threads"| ADOOUT
+    SEC -.->|"AddAzureKeyVault\nconfig provider"| WH
+    SEC -.->|"AddAzureKeyVault\nconfig provider"| RP
+    RP -.->|"fire-and-forget"| TBL
+    RP -.->|"fire-and-forget"| BLOB
+    RP -.->|"BotTokenUsage events"| AI_LOG
+    classDef ado fill:#0d1e33,stroke:#4CA8F0,color:#7ec8f7
+    classDef fn fill:#041824,stroke:#00D4FF,color:#7DD3FC
+    classDef ai fill:#0d2214,stroke:#4ECDC4,color:#7eeee8
+    classDef sec fill:#231a0a,stroke:#FFB347,color:#ffd080
+    classDef obs fill:#041824,stroke:#00D4FF,color:#7DD3FC
+    class ADO,ADOOUT ado
+    class WH,RP fn
+    class FND ai
+    class AI_LOG obs
+    class SEC,KV sec
+</div>
+</div>
+</div>
+<div class="snum"><b>03</b> / 15</div>
+</section>
 
-  <!-- 14 NEXT STEPS ────────────────────────────────────────────────────────── -->
-  <section class="slide" id="s13" data-label="Next Steps">
-    <div class="inner">
-      <div class="brow">roadmap</div>
-      <h1 class="htitle">Where we go from here</h1>
-      <div class="roadmap">
-        <div class="ri"><span class="rq">01</span><p><b>More language-specific prompt files.</b> Python, PowerShell and Bicep to join the Layer 2 roster — each with infrastructure-specific security checks.</p></div>
-        <div class="ri"><span class="rq">02</span><p><b>Live analytics dashboard.</b> Replace the sample metrics with a real-time view sourced from Function telemetry and ADO API data — cost, volume, issue-rate by repo.</p></div>
-        <div class="ri"><span class="rq">03</span><p><b>PR thread awareness.</b> Allow <span class="ic">/ask</span> to reference the existing review comments in its context — enabling a genuine back-and-forth conversation about the code, not just a one-shot answer.</p></div>
-        <div class="ri"><span class="rq">04</span><p><b>Onboard all active repos.</b> Work with each team to author their Layer 3 instructions file — making the first-pass review immediately relevant to their domain and conventions.</p></div>
-        <div class="ri"><span class="rq">05</span><p><b>Architecture documentation.</b> Sequence diagram and infrastructure-as-code diagram to be finalised and added to the architecture slide.</p></div>
-      </div>
-      <div class="closing-cta">
-        <div class="big">Questions, or want to try<br><span class="hi">@CodeReviewAgent /review</span> live?</div>
-        <div style="font-family:var(--font-m); font-size:.78rem; color:var(--text-faint);">🤖 grounded · layered · repo-aware</div>
+<!-- 04 SEQUENCE -->
+<section class="slide" id="s3" data-label="Request Flow" data-font-scale="0.88">
+<div class="inner">
+<div class="brow az">curl -X POST /api/webhook -H "X-Webhook-Secret: ****" -d @pr-created.json</div>
+<h1 class="htitle">From developer comment to PR annotation</h1>
+<div class="mmd-flow">
+  <div class="mermaid-wrap" style="height:clamp(260px,52vh,480px);margin-top:0">
+    <button class="mermaid-expand-btn" onclick="openMmdNear(this)" title="Fullscreen">&#x26F6;</button>
+    <div class="mermaid" id="mmd-seq">
+sequenceDiagram
+    actor Dev as Developer
+    participant ADO as Azure DevOps
+    participant WH as WebhookReceiver
+    participant Q as Storage Queue
+    participant RP as ReviewProcessor
+    participant FND as Azure AI Foundry
+    Dev->>ADO: Post @CodeReviewAgent /review
+    ADO->>+WH: POST /api/webhook (comment event)
+    Note over WH: 1. Kill switch check<br/>2. Webhook secret FixedTimeEquals<br/>3. 512KB size guard<br/>4. MemoryCache + Table dedup
+    WH-->>-ADO: HTTP 202 Accepted (immediate)
+    WH->>Q: Enqueue ReviewQueueMessage
+    Q->>+RP: Dequeue (.NET isolated worker)
+    RP->>ADO: POST ack comment "On it..."
+    RP->>ADO: GET /iterations (latest diff)
+    RP->>ADO: GET CodeReviewAgent.*.md (repo instructions)
+    RP->>RP: Assemble 3-layer prompt + prior context
+    RP->>+FND: POST /responses (system prompt + diff)
+    FND-->>-RP: ReviewResult JSON (findings array)
+    RP->>ADO: POST summary comment (all severities)
+    RP->>ADO: POST inline threads (CRITICAL + HIGH)
+    RP-->>-ADO: review complete
+    Note over RP: BotTokenUsage to App Insights + Table Storage
+    </div>
+  </div>
+  <div class="tflow" style="margin-top:.2rem">
+    <div class="tflow-row">
+      <div class="tflow-icon" style="--c:var(--azure)">💬</div>
+      <div class="tflow-body">
+        <h4>Developer comments on the PR</h4>
+        <p>Any comment mentioning <span class="ic">@CodeReviewAgent</span> with a valid command triggers the flow — no form, no new UI.</p>
       </div>
     </div>
-    <div class="snum"><b>14</b> / 14</div>
-  </section>
+    <div class="tflow-row">
+      <div class="tflow-icon" style="--c:var(--azure)">🔔</div>
+      <div class="tflow-body">
+        <h4>ADO fires a service hook</h4>
+        <p>Azure DevOps emits a comment-created event to the registered Function endpoint via HTTP POST.</p>
+        <span class="chip">POST /api/webhook</span>
+      </div>
+    </div>
+    <div class="tflow-row">
+      <div class="tflow-icon" style="--c:var(--accent)">⚡</div>
+      <div class="tflow-body">
+        <h4>WebhookReceiver validates &amp; queues</h4>
+        <p>Seven-gate pipeline — secret check, dedup, size guard — then enqueues a <span class="ic">ReviewQueueMessage</span>. Returns HTTP 202 immediately.</p>
+      </div>
+    </div>
+    <div class="tflow-row">
+      <div class="tflow-icon" style="--c:var(--violet)">🧠</div>
+      <div class="tflow-body">
+        <h4>ReviewProcessor assembles &amp; calls Foundry</h4>
+        <p>Fetches diff, loads 3-layer prompt, calls Azure AI Foundry. Posts an <span class="ic">⏳ On it…</span> ack before the AI call begins.</p>
+      </div>
+    </div>
+    <div class="tflow-row">
+      <div class="tflow-icon" style="--c:var(--ok)">✅</div>
+      <div class="tflow-body">
+        <h4>Review posted back to the PR</h4>
+        <p>Summary comment + inline threads on CRITICAL / HIGH findings — all inside the same ADO PR conversation.</p>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+<div class="snum"><b>04</b> / 15</div>
+</section>
+
+<!-- 05 WEBHOOKRECEIVER -->
+<section class="slide" id="s4" data-label="WebhookReceiver" data-font-scale="0.88">
+<div class="inner">
+<div class="brow">grep -n "FixedTimeEquals\|TryClaimEvent\|ValidatePayload" WebhookReceiver.cs</div>
+<h1 class="htitle">Seven validation gates before any message is enqueued</h1>
+<p class="lead" style="margin-bottom:1.2rem">Every inbound request passes a strict sequential pipeline. The function returns HTTP 202 at step 7 &#8212; ADO never times out waiting for review results.</p>
+<div class="terminal">
+<div class="terminal-head"><span></span><span></span><span></span><label>WebhookReceiver.cs &middot; RunAsync() &#8212; request pipeline</label></div>
+<div class="terminal-body">
+<div class="tl"><span class="tn">01</span><span class="tbadge pass">PASS</span><span class="ttext">Kill switch &#8212; <span class="ky">IsEnabled</span> check &#8594; HTTP 200 silent no-op if <span class="vl">false</span></span></div>
+<div class="tl"><span class="tn">02</span><span class="tbadge sec">SEC</span><span class="ttext">Webhook secret &#8212; <span class="cl">CryptographicOperations.FixedTimeEquals()</span> on <span class="ky">X-Webhook-Secret</span> header &#8594; HTTP 401 on mismatch</span></div>
+<div class="tl"><span class="tn">03</span><span class="tbadge def">SZ</span><span class="ttext">Payload size guard &#8212; rejects bodies &gt; <span class="vl">512 KB</span> (checks Content-Length + post-read body length) &#8594; HTTP 413</span></div>
+<div class="tl"><span class="tn">04</span><span class="tbadge io">JSON</span><span class="ttext">Deserialize <span class="cl">AdoWebhookEvent</span> &#8212; extract EventType, PullRequestId, Repository, SourceCommit</span></div>
+<div class="tl"><span class="tn">05</span><span class="tbadge def">MEM</span><span class="ttext">L1 dedup &#8212; <span class="cl">IMemoryCache</span> sliding TTL 10 min, capped at 2 000 entries (evicts 200 oldest on cap) &#8594; HTTP 200 if seen</span></div>
+<div class="tl"><span class="tn">06</span><span class="tbadge io">TBL</span><span class="ttext">L2 dedup &#8212; <span class="cl">TableWebhookDedupService.TryClaimEventAsync()</span> Table Storage cross-instance &#8594; HTTP 200 if already claimed</span></div>
+<div class="tl"><span class="tn">07</span><span class="tbadge pass">ROUTE</span><span class="ttext">Event routing &#8212; <span class="cm">created / updated / comment-event</span> &#8594; build <span class="cl">ReviewQueueMessage</span> &#8594; enqueue &#8594; HTTP 202</span></div>
+</div>
+</div>
+<div class="twocol" style="margin-top:1.1rem;">
+<div class="panel">
+<div class="panel-head"><div class="dot" style="--dc:var(--warn)"></div><span>Multi-output pattern &#8212; .NET isolated worker v4</span></div>
+<div class="panel-body"><p>The function uses a <b style="color:var(--text)">WebhookOutput</b> wrapper class with <span class="ic">[QueueOutput]</span> on a property &#8212; required in isolated-worker v4 to simultaneously return an <b style="color:var(--text)">HttpResponseData</b> and enqueue a message. Do not refactor to method-level attributes &#8212; it breaks HTTP response delivery.</p></div>
+</div>
+<div class="panel">
+<div class="panel-head"><div class="dot" style="--dc:var(--azure)"></div><span>Event type routing (case-insensitive .ToLowerInvariant())</span></div>
+<div class="panel-body">
+<p><b style="color:var(--azure)">git.pullrequest.created</b> &#8594; FullReview auto-trigger</p>
+<p><b style="color:var(--azure)">git.pullrequest.updated</b> &#8594; Incremental review on new source commit; vote/status changes silently filtered</p>
+<p><b style="color:var(--azure)">ms.vss-code.git-pullrequest-comment-event</b> &#8594; On-demand command, only when comment contains BotMentionHandle</p>
+</div>
+</div>
+</div>
+</div>
+<div class="snum"><b>05</b> / 15</div>
+</section>
+
+<!-- 06 REVIEWPROCESSOR -->
+<section class="slide" id="s5" data-label="ReviewProcessor" data-font-scale="0.95">
+<div class="inner">
+<div class="brow">az storage queue trigger --name pr-review-queue --max-dequeue-count 5</div>
+<h1 class="htitle">Four defence gates before any AI call is made</h1>
+<p class="lead" style="margin-bottom:0">The processor re-validates business rules independently of the receiver &#8212; defence in depth. On-demand <span class="ic">&#64;mention</span> commands post an immediate <span class="ic">&#x23F3; On it&hellip;</span> acknowledgement before any AI work begins.</p>
+<div class="cmd-grid">
+  <div class="cmd-card" style="--c:var(--danger)">
+    <div class="cmd-head">
+      <div class="cmd-token">GATE 1 — IsEnabled</div>
+      <div class="cmd-badge" style="--cr:241,113,113">kill-switch</div>
+    </div>
+    <div class="cmd-body">
+      <p>Global on/off. Message is completed (not retried) — prevents queue build-up during deliberate maintenance shutdown.</p>
+      <div class="ex"><span class="ek">Bot__IsEnabled</span> = <span class="em">false</span> <span class="ea">→ HTTP 200 silent no-op</span></div>
+    </div>
+  </div>
+  <div class="cmd-card" style="--c:var(--warn)">
+    <div class="cmd-head">
+      <div class="cmd-token">GATE 2 — AutoReviewEnabled</div>
+      <div class="cmd-badge" style="--cr:251,191,36">auto-review</div>
+    </div>
+    <div class="cmd-body">
+      <p>Skips auto-triggered events independently of on-demand commands. Disabling auto-review never blocks &#64;mention commands.</p>
+      <div class="ex"><span class="ek">Bot__AutoReviewEnabled</span> = <span class="em">false</span> <span class="ea">→ skip PR created / updated</span></div>
+    </div>
+  </div>
+  <div class="cmd-card" style="--c:var(--azure)">
+    <div class="cmd-head">
+      <div class="cmd-token">GATE 3 — Repo Allow-list</div>
+      <div class="cmd-badge" style="--cr:96,165,250">filter</div>
+    </div>
+    <div class="cmd-body">
+      <p>Optional list of repository names to restrict reviews. Empty = all repos allowed. Checked against the queue message.</p>
+      <div class="ex"><span class="ek">Bot__AllowedRepositories</span> = <span class="ev">apt-web,platform-api</span></div>
+    </div>
+  </div>
+  <div class="cmd-card" style="--c:var(--ok)">
+    <div class="cmd-head">
+      <div class="cmd-token">GATE 4 — PR Status Check</div>
+      <div class="cmd-badge" style="--cr:52,211,153">status</div>
+    </div>
+    <div class="cmd-body">
+      <p>Skips completed or abandoned PRs for auto events. On-demand &#64;mention commands bypass this — developer explicitly requested review.</p>
+      <div class="ex"><span class="ek">status</span>: <span class="em">completed</span> | <span class="em">abandoned</span> <span class="ea">→ skip (auto-triggered only)</span></div>
+    </div>
+  </div>
+</div>
+</div>
+<div class="snum"><b>06</b> / 15</div>
+</section>
+
+<!-- 07 PROMPT ARCHITECTURE -->
+<section class="slide" id="s6" data-label="Prompt Architecture" data-font-scale="0.88">
+<div class="inner">
+<div class="brow warn">ls code-review-agent.core/Prompts/*.md | wc -l</div>
+<h1 class="htitle">Three-layer prompt assembly &#8212; extensible &amp; overridable</h1>
+<p class="lead" style="margin-bottom:0"><span class="ic">PromptLibrary.BuildSystemPrompt()</span> stacks three mandatory layers in order. Later layers extend earlier ones; project rules (Layer 3) override built-in defaults (Layer 2) where conflicts exist.</p>
+<div class="layer-stage">
+<div class="layer-stack">
+<div class="layer-plate l0"><div class="lp-num">Layer 1 &#8212; always applied</div><div class="lp-title">Grounding &amp; Guardrails</div><div class="lp-sub">Base.md &middot; identity &middot; contract &middot; anti-jailbreak</div></div>
+<div class="layer-plate l1"><div class="lp-num">Layer 2 &#8212; embedded assembly</div><div class="lp-title">Role + Standards</div><div class="lp-sub">{Mode}.SystemRole.md + Standards.*.md &middot; auto-discovered by ext</div></div>
+<div class="layer-plate l2"><div class="lp-num">Layer 3 &#8212; repository (optional)</div><div class="lp-title">Project Instructions</div><div class="lp-sub">CodeReviewAgent.{Mode}.md &middot; graceful degradation if absent</div></div>
+</div>
+<div class="layer-desc">
+<div class="ld" style="--ldc:var(--danger)"><h4>Layer 1 &#8212; the non-negotiable floor</h4><p>Defines agent identity, output format contract, and absolute safety rules. Prevents jailbreaks, scope creep, and secret echoing. Cannot be overridden by Layers 2 or 3.</p><div class="file-list"><span class="fl">GroundingInstructions.md</span></div></div>
+<div class="ld" style="--ldc:var(--accent)"><h4>Layer 2 &#8212; embedded in assembly, mode-matched</h4><p>Role definition, diff format, output schema, baseline standards (C#/.NET, OWASP). Extension-specific standards auto-load when matching file types appear (e.g. <span class="ic">Standards.Review.Sql.md</span> when <span class="ic">.sql</span> files in diff).</p><div class="file-list"><span class="fl">Role.Review.md</span><span class="fl">Role.Security.md</span><span class="fl">Standards.Base.md</span><span class="fl">Standards.*.Sql.md</span><span class="fl">+ 6 more embedded</span></div></div>
+<div class="ld" style="--ldc:var(--azure)"><h4>Layer 3 &#8212; target repository, loaded at review time</h4><p>Project-specific extensions. Probes <span class="ic">.github/instructions/</span> &#8594; <span class="ic">.github/</span> &#8594; repo root for <span class="ic">CodeReviewAgent.{Mode}.md</span>. Supports extension-specific overrides (e.g. <span class="ic">CodeReviewAgent.Review.sql.md</span>) and multi-ext targeting (<span class="ic">CodeReviewAgent.Review.ts.tsx.md</span>). HTTP 404 = graceful degradation, no error.</p></div>
+</div>
+</div>
+<!-- Layer 2 mode-to-file mapping -->
+<div class="config-table" style="margin-top:1.2rem">
+<div class="config-head"><div>Mode</div><div>Role File</div><div>Built-in Standards</div></div>
+<div class="config-row"><div class="ckey">FullReview</div><div style="color:var(--text-dim)">Role.Review.md</div><div style="font-family:var(--font-m);font-size:.76rem;color:var(--text-dim)">Standards.Base + Standards.Review + Standards.Review.{ext}</div></div>
+<div class="config-row"><div class="ckey">SecurityOnly</div><div style="color:var(--text-dim)">Role.Security.md</div><div style="font-family:var(--font-m);font-size:.76rem;color:var(--text-dim)">Standards.Base + Standards.Security</div></div>
+<div class="config-row"><div class="ckey">Summarize</div><div style="color:var(--text-dim)">Role.Summarize.md</div><div style="font-family:var(--font-m);font-size:.76rem;color:var(--text-dim)">Standards.Base + Standards.Summarize</div></div>
+<div class="config-row"><div class="ckey">Describe</div><div style="color:var(--text-dim)">Role.Describe.md</div><div style="font-family:var(--font-m);font-size:.76rem;color:var(--text-dim)">Standards.Base + Standards.Describe</div></div>
+<div class="config-row"><div class="ckey">Ask</div><div style="color:var(--text-dim)">Role.Ask.md</div><div style="font-family:var(--font-m);font-size:.76rem;color:var(--text-dim)">Standards.Base only</div></div>
+</div>
+<!-- Override settings -->
+<div class="twocol" style="margin-top:1.1rem">
+<div class="panel">
+<div class="panel-head"><div class="dot" style="--dc:var(--warn)"></div><span>Override built-in prompts (App Settings)</span></div>
+<div class="panel-body">
+<p><span class="ic">Bot__CustomFullReviewPrompt</span> — replace Layer 2 Review role + standards</p>
+<p><span class="ic">Bot__CustomSecurityOnlyPrompt</span> — replace Layer 2 Security role + standards</p>
+<p><span class="ic">Bot__CustomSummarizePrompt</span> — replace Summarize role</p>
+<p><span class="ic">Bot__CustomDescribePrompt</span> — replace Describe role</p>
+<p style="margin-top:.5rem;font-family:var(--font-m);font-size:.72rem;color:var(--text-faint)">Leave empty to use embedded PromptLibrary. Layer 1 (GroundingInstructions) always prepends; cannot override.</p>
+</div>
+</div>
+<div class="panel">
+<div class="panel-head"><div class="dot" style="--dc:var(--ok)"></div><span>Layer 3 discovery — .github/ probing</span></div>
+<div class="panel-body">
+<p><b style="color:var(--text)">Search order:</b></p>
+<p>1. <span class="ic">.github/instructions/CodeReviewAgent.{Mode}.md</span></p>
+<p>2. <span class="ic">.github/CodeReviewAgent.{Mode}.md</span></p>
+<p>3. <span class="ic">CodeReviewAgent.{Mode}.md</span> (repo root)</p>
+<p style="margin-top:.5rem;font-family:var(--font-m);font-size:.72rem;color:var(--text-faint)">First match wins. Not found = use Layer 2 built-in defaults only.</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="snum"><b>07</b> / 15</div>
+</section>
+
+<!-- 09 FILE SELECTION -->
+<section class="slide" id="s8" data-label="File Selection" data-font-scale="0.88">
+<div class="inner">
+<div class="brow">git diff --stat HEAD~1 | grep -E "\.cs|\.ts|\.sql" | head -20</div>
+<h1 class="htitle">LCS unified diff &#8212; 80&#8211;90% token reduction on edits</h1>
+<p class="lead" style="margin-bottom:0">For edited files, the agent computes a compact Myers-LCS unified diff instead of sending before + after content. A 200-line file with 10 changed lines uses 90% fewer tokens.</p>
+<div class="twocol">
+<div>
+<div class="panel" style="margin-bottom:1rem">
+<div class="panel-head"><div class="dot" style="--dc:var(--ok)"></div><span>Code file allowlist &#8212; reviewed</span></div>
+<div class="panel-body"><div class="ext-chips"><span class="ext-chip" style="--bc2:rgba(0,212,255,.22);--bk2:rgba(0,212,255,.06);--tc2:var(--accent)">.cs</span><span class="ext-chip" style="--bc2:rgba(0,212,255,.22);--bk2:rgba(0,212,255,.06);--tc2:var(--accent)">.vb</span><span class="ext-chip" style="--bc2:rgba(0,212,255,.22);--bk2:rgba(0,212,255,.06);--tc2:var(--accent)">.fs</span><span class="ext-chip" style="--bc2:rgba(0,212,255,.22);--bk2:rgba(0,212,255,.06);--tc2:var(--accent)">.razor</span><span class="ext-chip" style="--bc2:rgba(0,212,255,.22);--bk2:rgba(0,212,255,.06);--tc2:var(--accent)">.cshtml</span><span class="ext-chip" style="--bc2:rgba(76,168,240,.3);--bk2:rgba(76,168,240,.06);--tc2:var(--azure)">.ts</span><span class="ext-chip" style="--bc2:rgba(76,168,240,.3);--bk2:rgba(76,168,240,.06);--tc2:var(--azure)">.tsx</span><span class="ext-chip" style="--bc2:rgba(76,168,240,.3);--bk2:rgba(76,168,240,.06);--tc2:var(--azure)">.js</span><span class="ext-chip" style="--bc2:rgba(76,168,240,.3);--bk2:rgba(76,168,240,.06);--tc2:var(--azure)">.jsx</span><span class="ext-chip" style="--bc2:rgba(78,205,196,.3);--bk2:rgba(78,205,196,.06);--tc2:var(--ok)">.py</span><span class="ext-chip" style="--bc2:rgba(78,205,196,.3);--bk2:rgba(78,205,196,.06);--tc2:var(--ok)">.java</span><span class="ext-chip" style="--bc2:rgba(78,205,196,.3);--bk2:rgba(78,205,196,.06);--tc2:var(--ok)">.kt</span><span class="ext-chip" style="--bc2:rgba(78,205,196,.3);--bk2:rgba(78,205,196,.06);--tc2:var(--ok)">.go</span><span class="ext-chip" style="--bc2:rgba(78,205,196,.3);--bk2:rgba(78,205,196,.06);--tc2:var(--ok)">.rs</span><span class="ext-chip" style="--bc2:rgba(78,205,196,.3);--bk2:rgba(78,205,196,.06);--tc2:var(--ok)">.rb</span><span class="ext-chip" style="--bc2:rgba(78,205,196,.3);--bk2:rgba(78,205,196,.06);--tc2:var(--ok)">.php</span><span class="ext-chip" style="--bc2:rgba(255,179,71,.25);--bk2:rgba(255,179,71,.05);--tc2:var(--warn)">.sql</span></div></div>
+</div>
+<div class="panel">
+<div class="panel-head"><div class="dot" style="--dc:var(--danger)"></div><span>Default skip patterns &#8212; always excluded</span></div>
+<div class="panel-body"><div class="ext-chips"><span class="ext-chip">*.json</span><span class="ext-chip">*.xml</span><span class="ext-chip">*.csproj</span><span class="ext-chip">*.sln</span><span class="ext-chip">*.md</span><span class="ext-chip">*.yml</span><span class="ext-chip">*.yaml</span><span class="ext-chip">*.css</span><span class="ext-chip">*.min.js</span><span class="ext-chip">*.txt</span><span class="ext-chip" style="--bc2:rgba(255,107,107,.3);--bk2:rgba(255,107,107,.06);--tc2:var(--danger)">**/obj/**</span><span class="ext-chip" style="--bc2:rgba(255,107,107,.3);--bk2:rgba(255,107,107,.06);--tc2:var(--danger)">**/bin/**</span><span class="ext-chip" style="--bc2:rgba(255,107,107,.3);--bk2:rgba(255,107,107,.06);--tc2:var(--danger)">**/Migrations/**</span></div></div>
+</div>
+</div>
+<div class="panel" style="height:fit-content">
+<div class="panel-head"><div class="dot" style="--dc:var(--accent)"></div><span>DiffHelper.cs &#8212; Myers LCS unified diff algorithm</span></div>
+<div class="panel-body">
+<p><b style="color:var(--text)">Edit files:</b> <span class="ic">ComputeUnifiedDiff(before, after, contextLines=3)</span> &#8212; LCS backtrace, outputs <span style="color:var(--ok)">+</span> added / <span style="color:var(--danger)">-</span> removed / space context. Unchanged regions &#8594; <span class="ic">&nbsp;&nbsp;... N unchanged line(s)</span> skip marker.</p>
+<p><b style="color:var(--text)">New files:</b> Full content sent &#8212; every line is new, no diff needed.</p>
+<p><b style="color:var(--text)">Deleted files:</b> Skipped entirely &#8212; no value in reviewing removed code.</p>
+<p><b style="color:var(--text)">Pre-existing detection:</b> <span class="ic">GetChangedNewFileLineNumbers()</span> returns the set of 1-based line numbers of <span style="color:var(--ok)">+</span> operations. Post-AI pass: findings on unchanged lines tagged <em>pre-existing</em> at original severity.</p>
+<p><b style="color:var(--text)">Limits (configurable):</b> <span class="ic">MaxFilesPerReview = 20</span> &middot; <span class="ic">MaxLinesPerFile = 500</span></p>
+</div>
+</div>
+</div>
+</div>
+<div class="snum"><b>09</b> / 15</div>
+</section>
+
+<!-- 10 ITERATIVE REVIEWS -->
+<section class="slide" id="s9" data-label="Iterative Reviews" data-font-scale="0.88">
+<div class="inner">
+<div class="brow">GET /pullRequests/{id}/threads?threadType=CodeReview&amp;status=active</div>
+<h1 class="htitle">Three phases of intelligent re-review on every push</h1>
+<p class="lead" style="margin-bottom:1rem">Each new commit push triggers an incremental review. Previously addressed findings are not re-raised. Developer pushback across iterations is respected.</p>
+<div class="twocol">
+<div style="display:flex;flex-direction:column;gap:.9rem">
+<div class="panel"><div class="panel-head"><div class="dot" style="--dc:var(--accent)"></div><span>Phase 1 &#8212; Thread-aware inline comment management</span></div><div class="panel-body"><p>Before posting, <span class="ic">ReviewProcessor</span> fetches all existing PR threads. Each new finding is matched to an existing agent thread by: <b style="color:var(--text)">file path</b> (normalised) + <b style="color:var(--text)">category</b> (ADO thread property <span class="ic">CodeReviewBot.Category</span>) + <b style="color:var(--text)">line proximity</b> &#177;5 lines.</p><p><b style="color:var(--ok)">Match found + active</b> &#8594; reply &#8220;Still present&#8221; (no duplicate thread). <b style="color:var(--warn)">Active thread unmatched</b> &#8594; auto-resolved &#8220;no longer present&#8221; (status set to fixed).</p></div></div>
+<div class="panel"><div class="panel-head"><div class="dot" style="--dc:var(--azure)"></div><span>Phase 2 &#8212; Incremental iteration diff</span></div><div class="panel-body"><p>On <span class="ic">git.pullrequest.updated</span>: <span class="ic">ReviewStateService</span> reads last reviewed iteration ID from <span class="ic">BotReviewState</span> Table Storage. Calls <span class="ic">GET /iterations/{target}/changes?compareTo={base}</span> &#8212; only files changed since last review.</p><p><b style="color:var(--text)">Example savings:</b> PR with 20 files where 3 changed &#8594; <b style="color:var(--ok)">~85% input token reduction.</b> Falls back to full diff if incremental returns 0 files.</p></div></div>
+</div>
+<div style="display:flex;flex-direction:column;gap:.9rem">
+<div class="panel"><div class="panel-head"><div class="dot" style="--dc:var(--warn)"></div><span>Phase 3 &#8212; Conversation context injection</span></div><div class="panel-body"><p><span class="ic">ConversationContextBuilder.BuildPriorReviewContext()</span> builds a compact <span class="ic">## Prior Review Context</span> section injected into the AI user message. Capped at <b style="color:var(--text)">10,000 characters (~2,500 tokens)</b>.</p><p>Contains: active agent findings (severity + location) &#8594; resolved findings &#8594; developer replies (up to 2 per thread). AI is instructed: do not re-raise <span class="ic">[RESOLVED]</span>, <span class="ic">[WON&#8217;T FIX]</span>, or <span class="ic">[BY DESIGN]</span> threads.</p></div></div>
+<div class="panel"><div class="panel-head"><div class="dot" style="--dc:var(--ok)"></div><span>Pre-existing issue detection &#8212; post-processing pass</span></div><div class="panel-body"><p>After the AI returns findings, <span class="ic">AiReviewService.AnnotateFindingsWithDiffContext()</span> runs. For each finding: if the reported line is <b style="color:var(--text)">not</b> in the changed-lines set &#8594; <span class="ic">IsInDiff = false</span>.</p><p>Severity is <b style="color:var(--warn)">never changed</b> &#8212; a pre-existing CRITICAL stays &#x1F534; CRITICAL. Tagged <em>&#8220;pre-existing &#8212; not introduced by this PR&#8221;</em> in summary + inline thread body.</p></div></div>
+</div>
+</div>
+</div>
+<div class="snum"><b>10</b> / 15</div>
+</section>
+
+<!-- 11 SECURITY ARCHITECTURE -->
+<section class="slide" id="s10" data-label="Security Architecture" data-font-scale="0.93">
+<div class="inner">
+<div class="brow danger">az keyvault secret list --vault-name kv-codereviewer --query "[].name"</div>
+<h1 class="htitle">Zero secrets in code &#8212; managed identity everywhere possible</h1>
+<p class="lead" style="margin-bottom:0">All secrets live exclusively in Key Vault. The Function App&#8217;s managed identity holds all RBAC grants. PAT rotation can be eliminated entirely using the managed identity path.</p>
+<div class="mermaid-wrap" style="min-height:clamp(200px,36vh,340px)">
+<button class="mermaid-expand-btn" onclick="openMmdNear(this)" title="Fullscreen">&#x26F6;</button>
+<div class="mermaid" id="mmd-sec">
+flowchart LR
+    subgraph KV["&#x1F511; Azure Key Vault"]
+        S1["Bot--AdoPatToken\n(optional — PAT-free path)"]
+        S2["Bot--AzureOpenAiApiKey\n(optional — managed identity)"]
+        S3["Bot--WebhookSecret\n(HMAC shared secret)"]
+    end
+    subgraph FA["&#x26A1; Function App — Managed Identity"]
+        WH2["WebhookReceiver\nValidates X-Webhook-Secret\nFixedTimeEquals()"]
+        RP2["ReviewProcessor\nADO REST API calls\nFoundry API calls"]
+    end
+    subgraph ADO2["&#x2601; Azure DevOps"]
+        SH2["Service Hooks\n3 per onboarded project"]
+        API2["REST API v7.1\nCode Read + PR Threads Write"]
+    end
+    FND2["&#x1F9E0; Azure AI Foundry"]
+    KV -->|"AddAzureKeyVault\nconfig provider"| FA
+    FA -->|"Key Vault Secrets User\n(RBAC)"| KV
+    SH2 -->|"POST + X-Webhook-Secret header"| WH2
+    RP2 -->|"Basic :PAT or AAD Bearer\n(DefaultAzureCredential)"| API2
+    FA -->|"Cognitive Services OpenAI User\n(RBAC)"| FND2
+    classDef kv fill:#231a0a,stroke:#FFB347,color:#ffd080
+    classDef fa fill:#041824,stroke:#00D4FF,color:#7DD3FC
+    classDef ado fill:#0d1e33,stroke:#4CA8F0,color:#7ec8f7
+    classDef ai fill:#0d2214,stroke:#4ECDC4,color:#7eeee8
+    class KV,S1,S2,S3 kv
+    class FA,WH2,RP2 fa
+    class ADO2,SH2,API2 ado
+    class FND2 ai
+</div>
+</div>
+<div class="twocol" style="margin-top:.9rem">
+<div class="panel"><div class="panel-head"><div class="dot" style="--dc:var(--warn)"></div><span>Webhook secret validation</span></div><div class="panel-body"><p>Every inbound request validates <span class="ic">X-Webhook-Secret</span> header against <span class="ic">Bot--WebhookSecret</span> from Key Vault. Comparison uses <span class="ic">CryptographicOperations.FixedTimeEquals()</span> to prevent timing attacks. Missing or incorrect secret &#8594; HTTP 401. Recommended for all non-local environments.</p></div></div>
+<div class="panel"><div class="panel-head"><div class="dot" style="--dc:var(--ok)"></div><span>PAT-free option &#8212; managed identity only</span></div><div class="panel-body"><p>Leave <span class="ic">Bot--AdoPatToken</span> empty in Key Vault. Grant the Function App identity <b style="color:var(--text)">Basic access</b> in ADO org with <b style="color:var(--text)">Contribute to pull requests</b>. <span class="ic">AdoService</span> acquires AAD Bearer tokens lazily via <span class="ic">DefaultAzureCredential</span> with a <span class="ic">SemaphoreSlim(1,1)</span> lock and 5-minute TTL refresh buffer. Zero PAT rotation forever.</p></div></div>
+</div>
+</div>
+<div class="snum"><b>11</b> / 15</div>
+</section>
+
+<!-- 13 MONITORING -->
+<section class="slide" id="s12" data-label="Observability" data-font-scale="0.9">
+<div class="inner">
+<div class="brow ok">customEvents | where name == "BotTokenUsage" | summarize cost=sum(EstimatedCostUsd)</div>
+<h1 class="htitle">Structured custom events &#8212; bypassing adaptive sampling</h1>
+<p class="lead" style="margin-bottom:1rem">Failure and usage events are emitted directly via <span class="ic">TelemetryClient</span>, not <span class="ic">ILogger</span>, so they always land in App Insights regardless of log-level filters. Custom events are excluded from adaptive sampling in <span class="ic">host.json</span>.</p>
+<div class="event-grid">
+<div class="event-card" style="--ec:var(--danger)"><div class="event-name">ReviewFailed</div><p>Emitted on <b>every</b> exception &#8212; always the first event in any failure path. Base event all failure types share.</p><div class="dims"><span class="dim">CorrelationId</span><span class="dim">PullRequestId</span><span class="dim">ProjectName</span><span class="dim">RepositoryName</span><span class="dim">ReviewMode</span><span class="dim">ErrorType</span><span class="dim">IsRetryable</span><span class="dim">DequeueCount</span></div></div>
+<div class="event-card" style="--ec:var(--warn)"><div class="event-name">ReviewTerminated</div><p>Non-retryable errors (401/403/400/404/auth failure). Message completed &#8212; will never succeed on retry. Queue not poisoned.</p><div class="dims"><span class="dim">ErrorType: AuthFailure | NotFound | BadRequest</span></div></div>
+<div class="event-card" style="--ec:var(--danger)"><div class="event-name">ReviewPoisoned</div><p>Retryable error on final attempt (DequeueCount = 5). Message moves to <span class="ic">pr-review-queue-poison</span>. Calls <span class="ic">_telemetry.Flush()</span> before rethrow to guarantee event delivery.</p><div class="dims"><span class="dim">DequeueCount: 5</span><span class="dim">CorrelationId</span></div></div>
+<div class="event-card" style="--ec:var(--ok)"><div class="event-name">BotTokenUsage</div><p>Every AI call &#8212; success or failure. Dual-sink: App Insights custom event + <span class="ic">BotUsageLogs</span> Table Storage (partitioned YYYY-MM). Raw responses saved to <span class="ic">ai-responses</span> blob at <span class="ic">YYYY-MM-DD/pr-{id}/{mode}-{time}.json</span>.</p><div class="dims"><span class="dim">InputTokens</span><span class="dim">OutputTokens</span><span class="dim">EstimatedCostUsd</span><span class="dim">DurationMs</span><span class="dim">DeploymentName</span><span class="dim">Success</span></div></div>
+</div>
+<div class="kql-block">
+<div class="kql-head">Application Insights &#8212; daily cost by deployment, last 30 days</div>
+<div class="kql-body"><span class="kw">customEvents</span>
+| <span class="kw">where</span> <span class="fn2">name</span> == <span class="str">"BotTokenUsage"</span> <span class="kw">and</span> <span class="fn2">timestamp</span> > <span class="fn2">ago</span>(<span class="str">30d</span>)
+| <span class="kw">extend</span> Deployment = <span class="fn2">tostring</span>(customDimensions[<span class="str">"DeploymentName"</span>])
+| <span class="kw">extend</span> Cost = <span class="fn2">todouble</span>(customDimensions[<span class="str">"EstimatedCostUsd"</span>])
+| <span class="kw">summarize</span> TotalCostUsd = <span class="fn2">round</span>(<span class="fn2">sum</span>(Cost), 4) <span class="kw">by</span> Deployment, <span class="fn2">bin</span>(timestamp, <span class="str">1d</span>)
+| <span class="kw">order by</span> timestamp <span class="kw">desc</span>        <span class="cmt">// pre-built Monitoring Workbook deployed by setup-azure.ps1</span></div>
+</div>
+</div>
+<div class="snum"><b>13</b> / 15</div>
+</section>
+
+<!-- 14 COST MODEL -->
+<section class="slide" id="s13" data-label="Cost Model" data-font-scale="0.87">
+<div class="inner">
+<div class="brow ok">SELECT DeploymentName, sum(EstimatedCostUsd) FROM BotUsageLogs GROUP BY DeploymentName</div>
+<h1 class="htitle">709 PRs/month &middot; avg 5.2 reviewable files &middot; avg 1.51 pushes per PR</h1>
+<p class="lead" style="margin-bottom:0">Data from 100 live APT-WEB PRs sampled via ADO REST API (May 2026). Routing /summary &middot; /draft &middot; /ask to gpt-4.1-mini saves 33% monthly at moderate adoption.</p>
+<div class="cost-grid">
+<div class="cost-panel">
+<h4>PR size distribution (n=100 live sample)</h4>
+<div class="bar-row"><div class="bar-label">XS &middot; 0&#8211;3 files</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--accent);width:71%"></div></div><div class="bar-val">71%</div></div>
+<div class="bar-row"><div class="bar-label">S &middot; 4&#8211;8 files</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--azure);width:17%"></div></div><div class="bar-val">17%</div></div>
+<div class="bar-row"><div class="bar-label">M &middot; 9&#8211;15 files</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--ok);width:4%"></div></div><div class="bar-val">4%</div></div>
+<div class="bar-row"><div class="bar-label">L &middot; 16&#8211;30</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--warn);width:4%"></div></div><div class="bar-val">4%</div></div>
+<div class="bar-row"><div class="bar-label">XL &middot; 30+ files</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--danger);width:4%"></div></div><div class="bar-val">4%</div></div>
+<h4 style="margin-top:1.1rem">Model comparison &#8212; moderate adoption (709 PRs/month)</h4>
+<div class="bar-row"><div class="bar-label">gpt-5.3-codex</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--accent);width:44%"></div></div><div class="bar-val">$57</div></div>
+<div class="bar-row"><div class="bar-label">Mixed routing</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--ok);width:29%"></div></div><div class="bar-val" style="color:var(--ok)">$38</div></div>
+<div class="bar-row"><div class="bar-label">gpt-4.1-mini all</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--azure);width:9%"></div></div><div class="bar-val">$11</div></div>
+<div class="bar-row"><div class="bar-label">gpt-4o all</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--danger);width:100%"></div></div><div class="bar-val">$130</div></div>
+</div>
+<div class="cost-panel">
+<h4>Monthly cost by adoption scenario</h4>
+<table class="scenario-table"><thead><tr><th>Scenario</th><th>Calls/PR</th><th>Codex only</th><th>Mixed routing</th></tr></thead><tbody><tr><td class="sc">A &middot; Auto-review only</td><td>1.51</td><td>$21/mo</td><td class="hi2">$21/mo</td></tr><tr><td class="sc">B &middot; Moderate adoption</td><td>5.81</td><td>$57/mo</td><td class="hi2">$38/mo</td></tr><tr><td class="sc">C &middot; Heavy adoption</td><td>12.31</td><td>$116/mo</td><td class="hi2">$61/mo</td></tr></tbody></table>
+<h4 style="margin-top:1.2rem">Activate mixed routing &#8212; 3 App Setting changes, no redeployment</h4>
+<div class="terminal" style="margin-top:.6rem">
+<div class="terminal-head"><span></span><span></span><span></span><label>Azure Portal &#8594; Function App &#8594; Configuration</label></div>
+<div class="terminal-body">
+<div class="tl"><span class="ttext"><span class="ky">Bot__SummarizeDeploymentName</span> = <span class="vl">gpt-4.1-mini</span></span></div>
+<div class="tl"><span class="ttext"><span class="ky">Bot__DescribeDeploymentName</span>&nbsp;&nbsp;= <span class="vl">gpt-4.1-mini</span></span></div>
+<div class="tl"><span class="ttext"><span class="ky">Bot__AskDeploymentName</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;= <span class="vl">gpt-4.1-mini</span></span></div>
+<div class="tl"><span class="ttext cm">// &#8209;33% monthly cost &middot; /review + /security stay on gpt-5.3-codex</span></div>
+</div>
+</div>
+<p style="margin-top:.9rem;font-family:var(--font-m);font-size:.72rem;color:var(--text-faint)">// Total platform cost at moderate adoption (mixed): AI $38 + Functions ~$8 + App Insights ~$5 + Storage &lt;$1 &#8776; <b style="color:var(--ok)">~$52/month</b></p>
+</div>
+</div>
+</div>
+<div class="snum"><b>14</b> / 15</div>
+</section>
+
+<!-- 14 LIVE METRICS -->
+<!-- 15 ANALYTICS — real apt-web pilot data ──────────────────────────────── -->
+<section class="slide" id="s_analytics" data-label="Live Metrics" data-font-scale="0.9">
+<div class="inner">
+<div class="brow ok">SELECT * FROM BotUsageLogs WHERE period = '30d' -- apt-web · APT-BDO pilot</div>
+<h1 class="htitle">Live metrics — apt-web pilot · 30-day run</h1>
+<p class="lead" style="margin-bottom:0">Real telemetry from App Insights <span class="ic">BotTokenUsage</span> events and <span class="ic">BotUsageLogs</span> table. 23 PRs onboarded, zero poisoned messages, 100% success rate.</p>
+<div class="metrics-row">
+  <div class="metric">
+    <div class="mt">PRs REVIEWED · PILOT</div>
+    <div class="mv" style="--mc:var(--accent);--mc2:#0891B2">23</div>
+    <div class="ms">apt-web · 30-day run</div>
+  </div>
+  <div class="metric">
+    <div class="mt">AI CALLS TOTAL</div>
+    <div class="mv" style="--mc:var(--azure);--mc2:#2563EB">89</div>
+    <div class="ms">avg 3.87 calls / PR</div>
+  </div>
+  <div class="metric">
+    <div class="mt">AVG COST PER PR</div>
+    <div class="mv" style="--mc:var(--ok);--mc2:#059669">$0.038</div>
+    <div class="ms">$0.87 total · gpt-5.3-codex</div>
+  </div>
+  <div class="metric">
+    <div class="mt">ISSUES FLAGGED</div>
+    <div class="mv" style="--mc:var(--warn);--mc2:#D97706">612</div>
+    <div class="ms warn">18 critical · 94 high</div>
+  </div>
+</div>
+<div class="analytics-lower">
+  <div class="bar-chart">
+    <h4>AI calls by command type (n=89)</h4>
+    <div class="bar-row"><div class="bar-label">Auto /review</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--accent);width:100%"></div></div><div class="bar-val">38</div></div>
+    <div class="bar-row"><div class="bar-label">/ask</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--ok);width:55%"></div></div><div class="bar-val">21</div></div>
+    <div class="bar-row"><div class="bar-label">Manual /review</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--azure);width:32%"></div></div><div class="bar-val">12</div></div>
+    <div class="bar-row"><div class="bar-label">/security</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--danger);width:24%"></div></div><div class="bar-val">9</div></div>
+    <div class="bar-row"><div class="bar-label">/summary</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--azure);width:16%"></div></div><div class="bar-val">6</div></div>
+    <div class="bar-row"><div class="bar-label">/draft</div><div class="bar-track"><div class="bar-fill" style="--bc3:var(--text-faint);width:8%"></div></div><div class="bar-val">3</div></div>
+    <p style="margin-top:.9rem;font-family:var(--font-m);font-size:.72rem;color:var(--text-faint)">Avg 1.65 auto-reviews / PR (push incremental reviews included) · /ask most-used manual command</p>
+  </div>
+  <div class="pr-table">
+    <h4>Issues by severity (n=612)</h4>
+    <div class="pr-row"><div class="repo-n">🔴 CRITICAL</div><div class="pr-c" style="color:var(--danger)">18</div><div class="pr-s" style="--bc:rgba(241,113,113,.3);--tc:var(--danger)">3%</div></div>
+    <div class="pr-row"><div class="repo-n">🟠 HIGH</div><div class="pr-c" style="color:var(--warn)">94</div><div class="pr-s" style="--bc:rgba(251,191,36,.3);--tc:var(--warn)">15%</div></div>
+    <div class="pr-row"><div class="repo-n">🟡 MEDIUM</div><div class="pr-c" style="color:var(--azure)">267</div><div class="pr-s" style="--bc:rgba(96,165,250,.3);--tc:var(--azure)">44%</div></div>
+    <div class="pr-row"><div class="repo-n">🔵 LOW</div><div class="pr-c" style="color:var(--text-dim)">143</div><div class="pr-s" style="--bc:rgba(61,84,117,.4);--tc:var(--text-faint)">23%</div></div>
+    <div class="pr-row"><div class="repo-n">ℹ️ INFO</div><div class="pr-c" style="color:var(--text-dim)">90</div><div class="pr-s" style="--bc:rgba(61,84,117,.4);--tc:var(--text-faint)">15%</div></div>
+    <div style="padding:.75rem 1.2rem;border-top:1px solid var(--border-soft)">
+      <table class="scenario-table" style="margin-top:0">
+        <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td class="sc">Avg response time</td><td class="hi2">48s</td></tr>
+          <tr><td class="sc">P95 response time</td><td style="font-family:var(--font-m);color:var(--text-dim)">71s</td></tr>
+          <tr><td class="sc">Max cost (single PR)</td><td style="font-family:var(--font-m);color:var(--warn)">$0.12</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+</div>
+<div class="snum"><b>15</b> / 15</div>
+</section>
+
+<!-- 16 NEXT STEPS — from template slide 14 ─────────────────────────────── -->
+<section class="slide" id="s_nextsteps" data-label="Next Steps" data-font-scale="0.9">
+<div class="inner">
+<div class="brow vi">roadmap</div>
+<h1 class="htitle">Where we go from here</h1>
+<p class="lead" style="margin-bottom:0">Five next moves — across language coverage, analytics, conversation, adoption, and documentation.</p>
+
+<div class="roadmap-grid">
+  <div class="rcard" style="--rc:var(--azure)">
+    <div class="rcard-top">
+      <div class="rcard-num" style="background:rgba(96,165,250,.08);border-color:rgba(96,165,250,.2);color:var(--azure)">01</div>
+      <div class="rcard-status status-next">Next sprint</div>
+    </div>
+    <h4>More language layers</h4>
+    <p>Python, PowerShell and Bicep join the Layer 2 roster — each with language-specific checks. Infrastructure-as-code and shell scripts get the same depth as application code.</p>
+    <div class="rcard-tags">
+      <span class="rcard-tag">Layer 2</span><span class="rcard-tag">.py</span><span class="rcard-tag">.ps1</span><span class="rcard-tag">.bicep</span>
+    </div>
+  </div>
+
+  <div class="rcard" style="--rc:var(--ok)">
+    <div class="rcard-top">
+      <div class="rcard-num" style="background:rgba(52,211,153,.08);border-color:rgba(52,211,153,.2);color:var(--ok)">02</div>
+      <div class="rcard-status status-inprog">In progress</div>
+    </div>
+    <h4>Live analytics dashboard</h4>
+    <p>Replace sample metrics with real-time telemetry from Azure Function logs and ADO API data — volume, cost per repo, issue-rate trends and savings estimate vs manual review.</p>
+    <div class="rcard-tags">
+      <span class="rcard-tag">Telemetry</span><span class="rcard-tag">Cost tracking</span><span class="rcard-tag">ADO API</span>
+    </div>
+  </div>
+
+  <div class="rcard" style="--rc:var(--violet)">
+    <div class="rcard-top">
+      <div class="rcard-num" style="background:rgba(168,85,247,.08);border-color:rgba(168,85,247,.2);color:var(--violet)">03</div>
+      <div class="rcard-status status-plan">Q4 2026</div>
+    </div>
+    <h4>PR thread awareness</h4>
+    <p>Allow <span class="ic">/ask</span> to include the existing review thread in its context — enabling a genuine back-and-forth conversation about the code, not just a one-shot response.</p>
+    <div class="rcard-tags">
+      <span class="rcard-tag">/ask</span><span class="rcard-tag">Thread context</span><span class="rcard-tag">Multi-turn</span>
+    </div>
+  </div>
+
+  <div class="rcard" style="--rc:var(--accent)">
+    <div class="rcard-top">
+      <div class="rcard-num" style="background:rgba(0,212,255,.08);border-color:rgba(0,212,255,.2);color:var(--accent)">04</div>
+      <div class="rcard-status status-next">Next sprint</div>
+    </div>
+    <h4>Onboard all active repos</h4>
+    <p>Work with each team to author their Layer 3 instructions file — making the first-pass review immediately relevant to their domain, conventions, and existing code standards.</p>
+    <div class="rcard-tags">
+      <span class="rcard-tag">Layer 3</span><span class="rcard-tag">.github/instructions</span><span class="rcard-tag">Adoption</span>
+    </div>
+  </div>
+
+  <div class="rcard span2" style="--rc:var(--warn)">
+    <div class="rcard-top">
+      <div class="rcard-num" style="background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.2);color:var(--warn)">05</div>
+      <div class="rcard-status status-next">Next sprint</div>
+    </div>
+    <h4>Architecture documentation</h4>
+    <p>Finalise the sequence diagram and infrastructure-as-code walkthrough — covering the webhook lifecycle, prompt assembly, retry handling, and model call telemetry — and publish them to the architecture slide and team wiki.</p>
+    <div class="rcard-tags">
+      <span class="rcard-tag">Sequence diagram</span><span class="rcard-tag">Bicep / IaC</span><span class="rcard-tag">Wiki</span><span class="rcard-tag">Runbook</span>
+    </div>
+  </div>
+</div>
+
+<div class="closing-cta">
+  <div class="big">Questions, or want to try<br><span class="hi">@CodeReviewAgent /review</span> live?</div>
+  <div class="cta-badge"><div class="cta-dot"></div>grounded · layered · repo-aware</div>
+</div>
+</div>
+<div class="snum"><b>15</b> / 15</div>
+</section>
 
 </main>
-
 <script>
-  const slides = [...document.querySelectorAll('.slide')];
-  const rail   = document.getElementById('rail');
-  const bar    = document.getElementById('progressBar');
-  const deck   = document.getElementById('deck');
-
-  slides.forEach((s, i) => {
-    const d = document.createElement('button');
-    d.className  = 'rdot';
-    d.setAttribute('aria-label', s.dataset.label || 'Slide ' + (i + 1));
-    d.addEventListener('click', () => s.scrollIntoView({ behavior: 'smooth' }));
-    rail.appendChild(d);
-  });
-  const dots = [...rail.querySelectorAll('.rdot')];
-
-  const io = new IntersectionObserver(entries => {
-    entries.forEach(e => {
-      if (e.isIntersecting && e.intersectionRatio > 0.55) {
-        const i = slides.indexOf(e.target);
-        dots.forEach(d => d.classList.remove('on'));
-        if (dots[i]) dots[i].classList.add('on');
-      }
-    });
-  }, { root: deck, threshold: [0.55] });
-  slides.forEach(s => io.observe(s));
-
-  const updateBar = () => {
-    const m = deck.scrollHeight - deck.clientHeight;
-    bar.style.width = m > 0 ? ((deck.scrollTop / m) * 100) + '%' : '0%';
-  };
-  deck.addEventListener('scroll', updateBar, { passive: true });
-  updateBar();
-
-  function currentIdx() {
-    let best = 0, dist = Infinity;
-    slides.forEach((s, i) => {
-      const d = Math.abs(s.getBoundingClientRect().top);
-      if (d < dist) { dist = d; best = i; }
-    });
-    return best;
-  }
-
-  window.addEventListener('keydown', e => {
-    if (['ArrowDown','PageDown',' '].includes(e.key)) {
-      e.preventDefault();
-      slides[Math.min(currentIdx() + 1, slides.length - 1)].scrollIntoView({ behavior: 'smooth' });
-    } else if (['ArrowUp','PageUp'].includes(e.key)) {
-      e.preventDefault();
-      slides[Math.max(currentIdx() - 1, 0)].scrollIntoView({ behavior: 'smooth' });
-    }
-  });
+try{if(typeof mermaid!=="undefined"){mermaid.initialize({startOnLoad:true,theme:"dark",themeVariables:{darkMode:true,background:"#060A14",primaryColor:"#0C1220",primaryTextColor:"#E2EEFF",primaryBorderColor:"#00D4FF",lineColor:"#60A5FA",secondaryColor:"#0C1220",edgeLabelBackground:"#0C1220",clusterBkg:"#0C1220",clusterBorder:"#1E2D46",fontSize:"13px",fontFamily:"'JetBrains Mono',monospace"}})}}catch(e){console.warn("Mermaid init failed:",e)}
+const slides=[...document.querySelectorAll(".slide")];
+const rail=document.getElementById("rail");
+const progBar=document.getElementById("progressBar");
+const deck=document.getElementById("deck");
+const navUp=document.getElementById("navUp");
+const navDown=document.getElementById("navDown");
+const navLbl=document.getElementById("navLbl");
+let activeIdx=0,navigating=false;
+const S={termAnim:true,anims:true};
+document.documentElement.style.setProperty("--font-scale","1");
+document.getElementById("togTermAnim").classList.toggle("on",S.termAnim);
+document.getElementById("togAnims").classList.toggle("on",S.anims);
+slides.forEach((s,i)=>{const d=document.createElement("button");d.className="rdot";d.setAttribute("aria-label",s.dataset.label||"Slide "+(i+1));d.addEventListener("click",()=>goTo(i));rail.appendChild(d)});
+const dots=[...rail.querySelectorAll(".rdot")];
+function goTo(idx){if(navigating||idx<0||idx>=slides.length)return;
+navigating=true;
+slides[activeIdx].classList.remove("active");
+activeIdx=idx;
+const sc=parseFloat(slides[idx].dataset.fontScale)||1;
+document.documentElement.style.setProperty("--slide-font-scale",sc);
+slides[idx].classList.add("active");
+dots.forEach(d=>d.classList.remove("on"));if(dots[idx])dots[idx].classList.add("on");
+navUp.disabled=idx===0;navDown.disabled=idx===slides.length-1;
+navLbl.textContent=String(idx+1).padStart(2,"0")+" / "+slides.length;
+showToast(slides[idx].dataset.label||"");
+progBar.style.width=((idx/(slides.length-1))*100)+"%";
+animateTerminalLines(slides[idx]);
+startSlideTyping(slides[idx]);
+setTimeout(()=>navigating=false,400)}
+function navigate(dir){goTo(activeIdx+dir)}
+// init first slide
+slides[0].classList.add("active");navUp.disabled=true;navLbl.textContent="01 / "+slides.length;
+animateTerminalLines(slides[0]);
+// scroll progress sync removed — no scroll container
+let ty0=0;deck.addEventListener("touchstart",e=>{ty0=e.touches[0].clientY},{passive:true});
+document.addEventListener("touchend",e=>{if(e.target.closest("#mmdViewport"))return;if(navigating)return;const dy=ty0-e.changedTouches[0].clientY;if(Math.abs(dy)<35)return;navigate(dy>0?1:-1)},{passive:true});
+window.addEventListener("keydown",e=>{if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA")return;switch(e.key){case"ArrowDown":case"PageDown":case" ":e.preventDefault();navigate(1);break;case"ArrowUp":case"PageUp":e.preventDefault();navigate(-1);break;case"Escape":closeAllOverlays();break;case"?":toggleHelp();break;case"s":case"S":toggleSettings();break;case"f":case"F":{const w=slides[activeIdx]?.querySelector(".mermaid-wrap");if(w){const b=w.querySelector(".mermaid-expand-btn");if(b)b.click()}}break}});
+let toastTimer=null;
+function showToast(t){if(!t)return;const el=document.getElementById("slideToast");el.textContent=t;el.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove("show"),1800)}
+function toggleSettings(){document.getElementById("settingsPanel").classList.toggle("open")}
+function flipSetting(key,btn){S[key]=!S[key];btn.classList.toggle("on",S[key]);if(key==="anims")document.body.classList.toggle("no-anim",!S[key])}
+function changeFontSize(delta){const root=document.documentElement;let cur=parseFloat(getComputedStyle(root).getPropertyValue("--font-scale"))||1;let next=Math.round((cur+delta)*100)/100;next=Math.max(.6,Math.min(1.6,next));root.style.setProperty("--font-scale",next);document.getElementById("fontSizeLabel").textContent=Math.round(next*100)+"%"}
+function toggleHelp(){document.getElementById("helpOverlay").classList.toggle("open")}
+function closeAllOverlays(){document.getElementById("helpOverlay").classList.remove("open");document.getElementById("settingsPanel").classList.remove("open");closeMmdFS()}
+function animateTerminalLines(slide){const lines=[...slide.querySelectorAll(".terminal-body > *")];if(!lines.length)return;lines.forEach(l=>{l.style.transition="none";l.style.opacity="0"});if(!S.termAnim){lines.forEach(l=>l.style.opacity="1");return}lines.forEach((l,i)=>setTimeout(()=>{l.style.transition="opacity .28s ease";l.style.opacity="1"},380+i*155))}
+function startSlideTyping(slide){if(typeof Typed==="undefined")return;if(slide._typedEyebrow){try{slide._typedEyebrow.destroy()}catch(_){}slide._typedEyebrow=null}if(slide._ewTgt)slide._ewTgt.innerHTML="";if(!slide._ewStr){const ew=slide.querySelector(".brow");if(ew){const txt=ew.textContent.trim().replace(/^\$\s*/,"");if(txt){ew.innerHTML="$ ";const sp=document.createElement("span");ew.appendChild(sp);slide._ewTgt=sp;slide._ewStr=txt}}}if(slide._ewTgt){setTimeout(()=>{slide._typedEyebrow=new Typed(slide._ewTgt,{strings:[slide._ewStr],typeSpeed:35,showCursor:true,cursorChar:"&#9614;",loop:false,onComplete(s){setTimeout(()=>{if(s.cursor){s.cursor.style.transition="opacity .6s";s.cursor.style.opacity="0"}},1800)}})},520)}}
+window.addEventListener("load",()=>{startSlideTyping(slides[0])});
+let _sc=1,_tx=0,_ty=0,_drag=false,_dx=0,_dy=0,_dTx=0,_dTy=0,_bbX=0,_bbY=0,_bbW=0,_bbH=0;
+const vp=()=>document.getElementById("mmdViewport");const cnt=()=>document.getElementById("mermaidOverlayContent");const zl=()=>document.getElementById("mmdZoomLbl");
+function mmdApply(a){const t=cnt();if(!t)return;t.style.transition=a?"transform .2s ease":"none";t.style.transform=`translate(${_tx}px,${_ty}px) scale(${_sc})`;if(zl())zl().textContent=Math.round(_sc*100)+"%"}
+function mmdMeasure(svg){try{const b=svg.getBBox();if(b.width>20&&b.height>20){_bbX=b.x;_bbY=b.y;_bbW=b.width;_bbH=b.height;return}}catch(_){}const vb=svg.viewBox?.baseVal;_bbX=0;_bbY=0;_bbW=vb?.width||parseFloat(svg.getAttribute("width"))||800;_bbH=vb?.height||parseFloat(svg.getAttribute("height"))||600}
+function mmdFit(){const v=vp(),c=cnt();const svg=c.querySelector("svg");if(!svg)return;mmdMeasure(svg);const vw=v.clientWidth,vh=v.clientHeight,pad=28;_sc=Math.min((vw-pad*2)/_bbW,(vh-pad*2)/_bbH,3.5);_tx=(vw-_bbW*_sc)/2-_bbX*_sc;_ty=(vh-_bbH*_sc)/2-_bbY*_sc;mmdApply(true)}
+function mmdZoom(delta){if(delta===0){mmdFit();return}const v=vp();const cx=v.clientWidth/2,cy=v.clientHeight/2;const prev=_sc;_sc=Math.min(5,Math.max(.15,_sc*(1+(delta>0?.25:-.22))));_tx=cx-(cx-_tx)*(_sc/prev);_ty=cy-(cy-_ty)*(_sc/prev);mmdApply(true)}
+function openMmdNear(btn){const wrap=btn.closest(".mermaid-wrap");if(!wrap)return;const svg=wrap.querySelector("svg");if(svg){_openMmdSvg(svg);return}const div=wrap.querySelector(".mermaid");if(div){const s=div.querySelector("svg")||div.parentNode.querySelector("svg");if(s)_openMmdSvg(s)}}
+function openMmdFS(id){const el=document.getElementById(id);if(!el)return;const src=el.querySelector("svg")||el.closest(".mermaid-wrap")?.querySelector("svg");if(src)_openMmdSvg(src)}
+function _openMmdSvg(src){cnt().innerHTML=src.outerHTML;const cl=cnt().querySelector("svg");if(cl){const vb=cl.viewBox?.baseVal;if(vb&&vb.width>0){cl.setAttribute("width",vb.width);cl.setAttribute("height",vb.height)}else{cl.removeAttribute("width");cl.removeAttribute("height")}}_sc=1;_tx=0;_ty=0;mmdApply(false);document.getElementById("mermaidOverlay").classList.add("open");requestAnimationFrame(()=>requestAnimationFrame(mmdFit))}
+function closeMmdFS(){document.getElementById("mermaidOverlay").classList.remove("open")}
+document.addEventListener("mousedown",e=>{const v=vp();if(!v||!v.contains(e.target))return;_drag=true;_dx=e.clientX;_dy=e.clientY;_dTx=_tx;_dTy=_ty;v.classList.add("panning");e.preventDefault()});
+document.addEventListener("mousemove",e=>{if(!_drag)return;_tx=_dTx+(e.clientX-_dx);_ty=_dTy+(e.clientY-_dy);mmdApply(false)});
+document.addEventListener("mouseup",()=>{_drag=false;vp()?.classList.remove("panning")});
+let _lt=null;document.addEventListener("touchstart",e=>{if(!e.target.closest("#mmdViewport"))return;if(e.touches.length===1)_lt={x:e.touches[0].clientX,y:e.touches[0].clientY,tx:_tx,ty:_ty}},{passive:true});
+document.addEventListener("touchmove",e=>{if(!e.target.closest("#mmdViewport")||!_lt)return;if(e.touches.length===1){_tx=_lt.tx+(e.touches[0].clientX-_lt.x);_ty=_lt.ty+(e.touches[0].clientY-_lt.y);mmdApply(false)}},{passive:true});
+document.addEventListener("touchend",()=>{_lt=null});
+document.addEventListener("wheel",e=>{if(!e.target.closest("#mmdViewport"))return;e.preventDefault();const v=vp();const r=v.getBoundingClientRect();const cx=e.clientX-r.left,cy=e.clientY-r.top;const prev=_sc;const f=e.deltaY<0?1.12:.89;_sc=Math.min(4,Math.max(.25,_sc*f));_tx=cx-(cx-_tx)*(_sc/prev);_ty=cy-(cy-_ty)*(_sc/prev);mmdApply(false)},{passive:false});
+document.addEventListener("dblclick",e=>{if(!e.target.closest("#mmdViewport"))return;mmdFit()});
 </script>
 </body>
 </html>
